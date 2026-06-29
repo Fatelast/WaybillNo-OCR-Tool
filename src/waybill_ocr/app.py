@@ -1,2 +1,6 @@
+from waybill_ocr.ui.main_window import MainWindow
+
+
 def run() -> None:
-    return None
+    window = MainWindow()
+    window.run()
