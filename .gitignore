@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+*.spec.bak
+log/
+logs/
+output/
+识别结果.xlsx
+samples/input/*
+!samples/input/.gitkeep
+samples/actual/*
+!samples/actual/.gitkeep
+pytest-cache-files-*/
