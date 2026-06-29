@@ -39,7 +39,10 @@ def _convert_pdf_pages(file_path: Path, config: AppConfig):
 def _load_pdf_converter():
     global convert_from_path
     if convert_from_path is None:
-        from pdf2image import convert_from_path as pdf2image_convert_from_path
+        try:
+            from pdf2image import convert_from_path as pdf2image_convert_from_path
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("缺少 pdf2image 依赖，请先安装 requirements.txt 中的 PDF 转图依赖。") from exc
 
         convert_from_path = pdf2image_convert_from_path
 

@@ -44,7 +44,10 @@ class TesseractEngine:
 
     def _load_pytesseract(self) -> Any:
         if self._pytesseract is None:
-            import pytesseract
+            try:
+                import pytesseract
+            except ModuleNotFoundError as exc:
+                raise RuntimeError("缺少 pytesseract 依赖，请先安装 requirements.txt 中的 OCR 依赖。") from exc
 
             self._pytesseract = pytesseract
 

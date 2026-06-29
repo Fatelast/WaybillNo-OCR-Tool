@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from waybill_ocr.config import AppConfig
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
 
@@ -37,3 +39,20 @@ def test_tesseract_engine_recognizes_image_with_whitelist_config(tmp_path: Path)
             "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
         )
     ]
+
+
+def test_tesseract_engine_reports_missing_pytesseract(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "pytesseract":
+            raise ModuleNotFoundError("No module named 'pytesseract'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    engine = TesseractEngine(AppConfig())
+
+    with pytest.raises(RuntimeError, match="缺少 pytesseract 依赖"):
+        engine.recognize_image(Path("waybill.png"))

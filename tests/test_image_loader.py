@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from waybill_ocr.config import AppConfig
+import waybill_ocr.image_loader as image_loader
 from waybill_ocr.image_loader import iter_images_for_ocr
 
 
@@ -40,3 +43,22 @@ def test_iter_images_for_ocr_converts_pdf_pages(tmp_path: Path, monkeypatch):
             "first_page": 1,
         }
     ]
+
+
+def test_iter_images_for_ocr_reports_missing_pdf2image(monkeypatch, tmp_path: Path):
+    import builtins
+
+    pdf_path = tmp_path / "waybill.pdf"
+    pdf_path.write_bytes(b"fake")
+    monkeypatch.setattr(image_loader, "convert_from_path", None)
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "pdf2image":
+            raise ModuleNotFoundError("No module named 'pdf2image'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="缺少 pdf2image 依赖"):
+        list(iter_images_for_ocr(pdf_path, AppConfig()))
