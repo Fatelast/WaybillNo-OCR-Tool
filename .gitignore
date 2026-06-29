@@ -8,7 +8,7 @@ build/
 *.spec.bak
 log/
 logs/
-output/
+/output/
 识别结果.xlsx
 samples/input/*
 !samples/input/.gitkeep
