@@ -54,3 +54,38 @@ def test_process_directory_classifies_files_and_writes_workbook(tmp_path: Path, 
         "处理中: 1/1 waybill.jpg",
         "处理完成",
     ]
+
+def test_process_directory_excludes_output_directory_inside_input(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = input_dir / "output"
+    output_success = output_dir / "正确识别"
+    output_success.mkdir(parents=True)
+    source_path = input_dir / "waybill.jpg"
+    stale_output = output_success / "old.jpg"
+    source_path.write_bytes(b"source")
+    stale_output.write_bytes(b"old")
+    processed = []
+
+    def fake_process_file(task: FileTask, _config: AppConfig, _ocr_engine: FakeOcrEngine) -> RecognitionResult:
+        processed.append(task.relative_name)
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    assert processed == ["waybill.jpg"]

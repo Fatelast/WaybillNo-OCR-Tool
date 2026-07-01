@@ -58,3 +58,16 @@ def test_process_file_returns_unrecognized_when_processing_fails(tmp_path: Path,
     assert result.status == RecognitionStatus.UNRECOGNIZED
     assert result.container_code is None
     assert result.failure_reason == "PROCESS_FAILED: boom"
+
+def test_process_file_returns_invalid_when_text_contains_bad_check_digit(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+
+    result = process_file(task, AppConfig(), FakeOcrEngine("箱号 HNKU6331794"))
+
+    assert result.status == RecognitionStatus.INVALID
+    assert result.container_code == "HNKU6331794"
+    assert result.failure_reason == "INVALID_CHECK_DIGIT"

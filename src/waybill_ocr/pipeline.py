@@ -1,7 +1,7 @@
 import time
 
 from waybill_ocr.config import AppConfig
-from waybill_ocr.container_code.extractor import extract_candidates
+from waybill_ocr.container_code.extractor import extract_candidates, extract_invalid_candidates
 from waybill_ocr.image_loader import iter_images_for_ocr
 from waybill_ocr.models import FileTask, RecognitionResult, RecognitionSource, RecognitionStatus
 from waybill_ocr.ocr.base import OcrEngine
@@ -27,6 +27,18 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine) -> Re
                     started=started,
                 )
 
+            invalid_candidates = extract_invalid_candidates(combined_text)
+            if invalid_candidates:
+                return _build_result(
+                    task=task,
+                    status=RecognitionStatus.INVALID,
+                    container_code=invalid_candidates[0],
+                    source=RecognitionSource.OCR,
+                    failure_reason="INVALID_CHECK_DIGIT",
+                    ocr_text=combined_text,
+                    started=started,
+                )
+
         filename_candidates = extract_candidates(task.source_path.stem)
         if filename_candidates:
             return _build_result(
@@ -35,6 +47,18 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine) -> Re
                 container_code=filename_candidates[0],
                 source=RecognitionSource.FILENAME,
                 failure_reason=None,
+                ocr_text=combined_text,
+                started=started,
+            )
+
+        invalid_filename_candidates = extract_invalid_candidates(task.source_path.stem)
+        if invalid_filename_candidates:
+            return _build_result(
+                task=task,
+                status=RecognitionStatus.INVALID,
+                container_code=invalid_filename_candidates[0],
+                source=RecognitionSource.FILENAME,
+                failure_reason="INVALID_CHECK_DIGIT",
                 ocr_text=combined_text,
                 started=started,
             )

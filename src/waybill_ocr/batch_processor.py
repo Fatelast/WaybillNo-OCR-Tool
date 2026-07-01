@@ -3,7 +3,7 @@ from pathlib import Path
 
 from waybill_ocr.config import AppConfig
 from waybill_ocr.file_scanner import scan_input_files
-from waybill_ocr.models import RecognitionResult
+from waybill_ocr.models import FileTask, RecognitionResult
 from waybill_ocr.ocr.base import OcrEngine
 from waybill_ocr.output.classifier import copy_result_file
 from waybill_ocr.output.excel_writer import write_results
@@ -19,7 +19,7 @@ def process_directory(
     ocr_engine: OcrEngine,
     on_progress: ProgressCallback | None = None,
 ) -> list[RecognitionResult]:
-    tasks = scan_input_files(input_dir)
+    tasks = _exclude_output_tasks(scan_input_files(input_dir), output_dir)
     _emit(on_progress, f"扫描到 {len(tasks)} 个文件")
 
     results: list[RecognitionResult] = []
@@ -33,6 +33,17 @@ def process_directory(
     write_results(results, output_dir)
     _emit(on_progress, "处理完成")
     return results
+
+
+def _exclude_output_tasks(tasks: list[FileTask], output_dir: Path) -> list[FileTask]:
+    resolved_output = output_dir.resolve()
+    filtered_tasks = []
+    for task in tasks:
+        resolved_source = task.source_path.resolve()
+        if resolved_source == resolved_output or resolved_output in resolved_source.parents:
+            continue
+        filtered_tasks.append(task)
+    return filtered_tasks
 
 
 def _emit(on_progress: ProgressCallback | None, message: str) -> None:

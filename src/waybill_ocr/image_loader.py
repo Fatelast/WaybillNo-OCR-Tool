@@ -19,20 +19,27 @@ def iter_images_for_ocr(file_path: Path, config: AppConfig) -> Iterator[Path]:
         return
 
     with TemporaryDirectory() as temp_dir:
-        pages = _convert_pdf_pages(file_path, config)
-        for index, page in enumerate(pages, start=1):
-            image_path = Path(temp_dir) / f"page-{index}.png"
+        page_number = 1
+        while True:
+            pages = _convert_pdf_page(file_path, config, page_number)
+            if not pages:
+                break
+
+            page = pages[0]
+            image_path = Path(temp_dir) / f"page-{page_number}.png"
             page.save(image_path)
             yield image_path
+            page_number += 1
 
 
-def _convert_pdf_pages(file_path: Path, config: AppConfig):
+def _convert_pdf_page(file_path: Path, config: AppConfig, page_number: int):
     converter = _load_pdf_converter()
     return converter(
         pdf_path=str(file_path),
         dpi=300,
         poppler_path=str(config.poppler_path) if config.poppler_path else None,
-        first_page=1,
+        first_page=page_number,
+        last_page=page_number,
     )
 
 

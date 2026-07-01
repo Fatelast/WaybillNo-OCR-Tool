@@ -19,3 +19,10 @@ def test_packaging_files_exist_and_reference_bundled_resources():
     assert '("resources", "resources")' in spec_text
     assert 'name="运单箱号识别分拣"' in spec_text
     assert "console=False" in spec_text
+
+def test_tools_directory_documents_required_binaries():
+    tools_readme = (ROOT / "tools" / "README.md").read_text(encoding="utf-8")
+
+    assert "tools/tesseract/tesseract.exe" in tools_readme
+    assert "tools/poppler" in tools_readme
+    assert "pdftoppm.exe" in tools_readme

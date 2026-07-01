@@ -13,3 +13,15 @@ tools/
   poppler/
     pdftoppm.exe
 ```
+
+关键路径：
+
+- `tools/tesseract/tesseract.exe`
+- `tools/poppler/pdftoppm.exe`
+- 也支持 `tools/poppler/bin/pdftoppm.exe`
+- 也支持 `tools/poppler/Library/bin/pdftoppm.exe`
+
+如果不把工具放入本目录，也可以通过环境变量指定：
+
+- `WAYBILL_OCR_TESSERACT_CMD`
+- `WAYBILL_OCR_POPPLER_PATH`

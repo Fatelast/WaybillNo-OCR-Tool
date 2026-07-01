@@ -23,3 +23,41 @@ def test_copy_result_file_to_success_dir(tmp_path: Path):
 
     assert copied_path == output_dir / "正确识别" / source.name
     assert copied_path.read_bytes() == b"fake"
+
+def test_copy_result_file_keeps_existing_file_when_names_collide(tmp_path: Path):
+    first = tmp_path / "first" / "waybill.jpg"
+    second = tmp_path / "second" / "waybill.jpg"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    output_dir = tmp_path / "output"
+
+    first_result = RecognitionResult(
+        source_path=first,
+        original_name=first.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="HNKU6331795",
+        elapsed_ms=10,
+    )
+    second_result = RecognitionResult(
+        source_path=second,
+        original_name=second.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="HNKU6331795",
+        elapsed_ms=10,
+    )
+
+    first_copy = copy_result_file(first_result, output_dir)
+    second_copy = copy_result_file(second_result, output_dir)
+
+    assert first_copy.name == "waybill.jpg"
+    assert second_copy.name == "waybill-1.jpg"
+    assert first_copy.read_bytes() == b"first"
+    assert second_copy.read_bytes() == b"second"

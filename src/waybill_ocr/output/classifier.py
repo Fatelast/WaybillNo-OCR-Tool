@@ -19,6 +19,21 @@ STATUS_DIR_NAMES = {
 def copy_result_file(result: RecognitionResult, output_dir: Path) -> Path:
     target_dir = output_dir / STATUS_DIR_NAMES[result.status]
     target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / result.original_name
+    target_path = _unique_target_path(target_dir / result.original_name)
     shutil.copy2(result.source_path, target_path)
     return target_path
+
+
+def _unique_target_path(target_path: Path) -> Path:
+    if not target_path.exists():
+        return target_path
+
+    stem = target_path.stem
+    suffix = target_path.suffix
+    parent = target_path.parent
+    index = 1
+    while True:
+        candidate = parent / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
