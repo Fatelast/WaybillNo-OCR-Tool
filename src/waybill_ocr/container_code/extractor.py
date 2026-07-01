@@ -3,7 +3,7 @@ import re
 from waybill_ocr.container_code.validator import is_valid_container_code
 
 
-CANDIDATE_PATTERN = re.compile(r"[A-Z]{4}\s*\d{7}")
+CANDIDATE_PATTERN = re.compile(r"[A-Z]{3}U\s*\d{7}")
 
 
 def extract_candidates(text: str) -> list[str]:

@@ -1,8 +1,8 @@
 import re
 
 
-CONTAINER_PATTERN = re.compile(r"^[A-Z]{4}\d{7}$")
-CODE10_PATTERN = re.compile(r"^[A-Z]{4}\d{6}$")
+CONTAINER_PATTERN = re.compile(r"^[A-Z]{3}U\d{7}$")
+CODE10_PATTERN = re.compile(r"^[A-Z]{3}U\d{6}$")
 
 LETTER_VALUES = {
     "A": 10,
@@ -38,7 +38,7 @@ def calculate_check_digit(code10: str) -> int:
     """计算 ISO 6346 箱号校验位。"""
     normalized = code10.strip().upper()
     if not CODE10_PATTERN.fullmatch(normalized):
-        raise ValueError("箱号前 10 位必须为 4 位大写字母加 6 位数字")
+        raise ValueError("箱号前 10 位必须为 3 位大写字母、U 和 6 位数字")
 
     total = 0
     for index, char in enumerate(normalized):

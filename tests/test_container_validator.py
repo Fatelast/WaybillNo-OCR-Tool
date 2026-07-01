@@ -22,6 +22,10 @@ def test_invalid_format():
     assert is_valid_container_code("HINKU6331795") is False
 
 
+def test_rejects_non_u_category_identifier_even_when_check_digit_matches():
+    assert is_valid_container_code("IJIP5617782") is False
+
+
 def test_calculate_check_digit_rejects_invalid_prefix():
     with pytest.raises(ValueError, match="前 10 位"):
         calculate_check_digit("HNKU63317")

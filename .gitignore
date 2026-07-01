@@ -17,3 +17,4 @@ samples/actual/*
 pytest-cache-files-*/
 .idea/
 local-env.ps1
+.tmp/

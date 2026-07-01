@@ -19,3 +19,8 @@ def test_extract_removes_spaces_and_symbols():
 def test_extract_deduplicates_candidates():
     text = "HNKU6331795 HNKU6331795"
     assert extract_candidates(text) == ["HNKU6331795"]
+
+
+def test_extract_ignores_non_u_category_identifier():
+    text = "噪声 IJIP 5617782 真正箱号 GESU5903360P45G130"
+    assert extract_candidates(text) == ["GESU5903360"]

@@ -73,3 +73,45 @@ def test_cli_batch_processes_directory(monkeypatch, tmp_path: Path):
     assert calls[0]["ocr_engine"] == ("engine", AppConfig())
     calls[0]["on_progress"]("处理完成")
     assert stdout.getvalue() == "处理完成\n"
+
+
+def test_cli_verify_samples_prints_report_and_returns_status(monkeypatch, tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "actual"
+    baseline_path = tmp_path / "baseline.csv"
+    input_dir.mkdir()
+    baseline_path.write_text("filename,expected_code,should_recognize,quality_tag,notes\n", encoding="utf-8")
+    stdout = StringIO()
+    calls = []
+
+    class FakeReport:
+        ok = False
+        messages = ["样本验收失败: 0/1", "waybill.png: 未在处理结果中找到该样本"]
+
+    monkeypatch.setattr(cli_module, "default_config", lambda: AppConfig())
+    monkeypatch.setattr(cli_module, "TesseractEngine", lambda config: ("engine", config))
+    monkeypatch.setattr(
+        cli_module,
+        "verify_samples",
+        lambda **kwargs: calls.append(kwargs) or FakeReport(),
+    )
+
+    exit_code = cli_module.main(
+        [
+            "verify-samples",
+            "--input",
+            str(input_dir),
+            "--output",
+            str(output_dir),
+            "--baseline",
+            str(baseline_path),
+        ],
+        stdout=stdout,
+    )
+
+    assert exit_code == 1
+    assert calls[0]["input_dir"] == input_dir
+    assert calls[0]["output_dir"] == output_dir
+    assert calls[0]["baseline_path"] == baseline_path
+    assert calls[0]["ocr_engine"] == ("engine", AppConfig())
+    assert stdout.getvalue() == "样本验收失败: 0/1\nwaybill.png: 未在处理结果中找到该样本\n"

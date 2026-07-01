@@ -4,8 +4,8 @@ from waybill_ocr.models import RecognitionResult, RecognitionSource, Recognition
 from waybill_ocr.output.classifier import copy_result_file
 
 
-def test_copy_result_file_to_success_dir(tmp_path: Path):
-    source = tmp_path / "HNKU6331795.jpg"
+def test_copy_result_file_to_success_dir_with_container_code_name(tmp_path: Path):
+    source = tmp_path / "waybill.jpg"
     source.write_bytes(b"fake")
     output_dir = tmp_path / "output"
     result = RecognitionResult(
@@ -21,8 +21,30 @@ def test_copy_result_file_to_success_dir(tmp_path: Path):
 
     copied_path = copy_result_file(result, output_dir)
 
-    assert copied_path == output_dir / "正确识别" / source.name
+    assert copied_path == output_dir / "正确识别" / "HNKU6331795.jpg"
     assert copied_path.read_bytes() == b"fake"
+
+
+def test_copy_result_file_keeps_original_name_for_unrecognized_file(tmp_path: Path):
+    source = tmp_path / "waybill.jpg"
+    source.write_bytes(b"fake")
+    output_dir = tmp_path / "output"
+    result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        status=RecognitionStatus.UNRECOGNIZED,
+        container_code=None,
+        source=None,
+        failure_reason="NO_CONTAINER_CANDIDATE",
+        ocr_text="",
+        elapsed_ms=10,
+    )
+
+    copied_path = copy_result_file(result, output_dir)
+
+    assert copied_path == output_dir / "未识别" / source.name
+    assert copied_path.read_bytes() == b"fake"
+
 
 def test_copy_result_file_keeps_existing_file_when_names_collide(tmp_path: Path):
     first = tmp_path / "first" / "waybill.jpg"
@@ -57,7 +79,7 @@ def test_copy_result_file_keeps_existing_file_when_names_collide(tmp_path: Path)
     first_copy = copy_result_file(first_result, output_dir)
     second_copy = copy_result_file(second_result, output_dir)
 
-    assert first_copy.name == "waybill.jpg"
-    assert second_copy.name == "waybill-1.jpg"
+    assert first_copy.name == "HNKU6331795.jpg"
+    assert second_copy.name == "HNKU6331795-1.jpg"
     assert first_copy.read_bytes() == b"first"
     assert second_copy.read_bytes() == b"second"
