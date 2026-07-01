@@ -16,3 +16,4 @@ samples/actual/*
 !samples/actual/.gitkeep
 pytest-cache-files-*/
 .idea/
+local-env.ps1
