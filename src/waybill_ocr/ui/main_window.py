@@ -5,6 +5,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from waybill_ocr.batch_processor import process_directory
 from waybill_ocr.config import default_config
+from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
 
 
@@ -78,6 +79,8 @@ class MainWindow:
     def _process(self, input_dir: Path, output_dir: Path) -> None:
         try:
             config = default_config()
+            for message in format_diagnostic_messages(inspect_environment(config)):
+                self._append_log(message)
             engine = TesseractEngine(config)
             process_directory(input_dir, output_dir, config, engine, self._append_log)
         except Exception as exc:
