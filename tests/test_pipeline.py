@@ -89,7 +89,7 @@ def test_process_file_prefers_region_candidate_over_full_page_noise(tmp_path: Pa
     monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
     monkeypatch.setattr(
         "waybill_ocr.pipeline.iter_ocr_regions",
-        lambda image_path: [
+        lambda image_path, config: [
             OcrRegion(image_path=image_path, region_name="full"),
             OcrRegion(image_path=region_path, region_name="cell-r5-c1"),
         ],
@@ -109,3 +109,37 @@ def test_process_file_prefers_region_candidate_over_full_page_noise(tmp_path: Pa
     assert result.status == RecognitionStatus.SUCCESS
     assert result.container_code == "GESU5903360"
     assert result.source == RecognitionSource.OCR
+
+def test_process_file_closes_iterators_when_full_page_candidate_returns_early(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+    closed = {"images": False, "regions": False}
+
+    class ClosableIterator:
+        def __init__(self, values, close_key: str) -> None:
+            self.values = iter(values)
+            self.close_key = close_key
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.values)
+
+        def close(self) -> None:
+            closed[self.close_key] = True
+
+    def fake_images(*_args):
+        return ClosableIterator([source_path], "images")
+
+    def fake_regions(*_args):
+        return ClosableIterator([OcrRegion(image_path=source_path, region_name="full")], "regions")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", fake_images)
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_ocr_regions", fake_regions)
+
+    result = process_file(task, AppConfig(), FakeOcrEngine("HNKU6331795 45G1"))
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert closed == {"images": True, "regions": True}

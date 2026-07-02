@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from waybill_ocr.config import default_config, resolve_runtime_base_dir
+from waybill_ocr.config import default_config, resolve_default_work_dir, resolve_runtime_base_dir
 
 
 def test_default_config_discovers_tools_from_base_dir(tmp_path: Path):
@@ -42,3 +42,16 @@ def test_resolve_runtime_base_dir_prefers_pyinstaller_meipass(monkeypatch, tmp_p
     monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
 
     assert resolve_runtime_base_dir() == tmp_path
+
+def test_resolve_default_work_dir_uses_local_app_data():
+    work_dir = resolve_default_work_dir(env={"LOCALAPPDATA": "C:/Users/Test/AppData/Local"})
+
+    assert work_dir == Path("C:/Users/Test/AppData/Local") / "OCRTool" / "work"
+
+
+def test_resolve_default_work_dir_allows_environment_override(tmp_path: Path):
+    custom_work_dir = tmp_path / "custom-work"
+
+    work_dir = resolve_default_work_dir(env={"WAYBILL_OCR_WORK_DIR": str(custom_work_dir)})
+
+    assert work_dir == custom_work_dir

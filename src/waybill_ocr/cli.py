@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TextIO
 
 from waybill_ocr.batch_processor import process_directory
-from waybill_ocr.config import default_config
+from waybill_ocr.config import default_config, resolve_default_work_dir
 from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
 from waybill_ocr.sample_verifier import verify_samples
@@ -71,7 +71,7 @@ def _run_batch(args: argparse.Namespace, stdout: TextIO) -> int:
         print(f"输入文件夹不存在: {input_dir}", file=stdout)
         return 2
 
-    config = default_config()
+    config = default_config(work_dir=resolve_default_work_dir())
     engine = TesseractEngine(config)
     process_directory(
         input_dir=input_dir,
@@ -94,7 +94,7 @@ def _run_verify_samples(args: argparse.Namespace, stdout: TextIO) -> int:
         print(f"样本基线文件不存在: {baseline_path}", file=stdout)
         return 2
 
-    config = default_config()
+    config = default_config(work_dir=resolve_default_work_dir())
     engine = TesseractEngine(config)
     report = verify_samples(
         input_dir=input_dir,

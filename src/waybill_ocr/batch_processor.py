@@ -1,3 +1,4 @@
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -24,15 +25,19 @@ def process_directory(
 
     results: list[RecognitionResult] = []
     total = len(tasks)
-    for index, task in enumerate(tasks, start=1):
-        _emit(on_progress, f"处理中: {index}/{total} {task.relative_name}")
-        result = process_file(task, config, ocr_engine)
-        copy_result_file(result, output_dir)
-        results.append(result)
+    try:
+        for index, task in enumerate(tasks, start=1):
+            _emit(on_progress, f"处理中: {index}/{total} {task.relative_name}")
+            result = process_file(task, config, ocr_engine)
+            copy_result_file(result, output_dir)
+            results.append(result)
+            write_results(results, output_dir)
+            _emit(on_progress, _format_result_message(result))
 
-    write_results(results, output_dir)
-    _emit(on_progress, "处理完成")
-    return results
+        _emit(on_progress, "处理完成")
+        return results
+    finally:
+        _cleanup_work_dir(config)
 
 
 def _exclude_output_tasks(tasks: list[FileTask], output_dir: Path) -> list[FileTask]:
@@ -44,6 +49,16 @@ def _exclude_output_tasks(tasks: list[FileTask], output_dir: Path) -> list[FileT
             continue
         filtered_tasks.append(task)
     return filtered_tasks
+
+
+def _format_result_message(result: RecognitionResult) -> str:
+    detail = result.container_code or result.failure_reason or "无箱号"
+    return f"结果: {result.original_name} -> {result.status.value} ({detail})"
+
+
+def _cleanup_work_dir(config: AppConfig) -> None:
+    if config.work_dir:
+        shutil.rmtree(config.work_dir, ignore_errors=True)
 
 
 def _emit(on_progress: ProgressCallback | None, message: str) -> None:

@@ -20,8 +20,8 @@ def inspect_environment(
 ) -> list[DiagnosticResult]:
     checker = dependency_checker or _is_dependency_available
     return [
-        _check_dependency("pytesseract", checker),
-        _check_dependency("pdf2image", checker),
+        _check_dependency("Pillow", "PIL", checker),
+        _check_dependency("pdf2image", "pdf2image", checker),
         _check_tesseract(config),
         _check_poppler(config),
     ]
@@ -31,15 +31,15 @@ def format_diagnostic_messages(results: list[DiagnosticResult]) -> list[str]:
     return [f"[{'OK' if result.ok else '缺失'}] {result.message}" for result in results]
 
 
-def _is_dependency_available(name: str) -> bool:
-    return find_spec(name) is not None
+def _is_dependency_available(module_name: str) -> bool:
+    return find_spec(module_name) is not None
 
 
-def _check_dependency(name: str, checker: DependencyChecker) -> DiagnosticResult:
-    if checker(name):
-        return DiagnosticResult(name=name, ok=True, message=f"{name} 可用")
+def _check_dependency(display_name: str, module_name: str, checker: DependencyChecker) -> DiagnosticResult:
+    if checker(module_name):
+        return DiagnosticResult(name=display_name, ok=True, message=f"{display_name} 可用")
 
-    return DiagnosticResult(name=name, ok=False, message=f"缺少 {name} 依赖，请安装 requirements.txt。")
+    return DiagnosticResult(name=display_name, ok=False, message=f"缺少 {display_name} 依赖，请安装 requirements.txt。")
 
 
 def _check_tesseract(config: AppConfig) -> DiagnosticResult:

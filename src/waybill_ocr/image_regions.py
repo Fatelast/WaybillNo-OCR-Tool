@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Iterator
+
+from waybill_ocr.config import AppConfig
+from waybill_ocr.image_loader import temporary_directory
 
 
 @dataclass(frozen=True)
@@ -10,7 +12,7 @@ class OcrRegion:
     region_name: str
 
 
-def iter_ocr_regions(image_path: Path) -> Iterator[OcrRegion]:
+def iter_ocr_regions(image_path: Path, config: AppConfig) -> Iterator[OcrRegion]:
     yield OcrRegion(image_path=image_path, region_name="full")
 
     try:
@@ -21,9 +23,9 @@ def iter_ocr_regions(image_path: Path) -> Iterator[OcrRegion]:
             if width < 20 or height < 20:
                 return
 
-            with TemporaryDirectory() as temp_dir:
+            with temporary_directory(config) as temp_dir:
                 for region_name, box in _grid_regions(width, height):
-                    region_path = Path(temp_dir) / f"{region_name}.png"
+                    region_path = temp_dir / f"{region_name}.png"
                     image.crop(box).save(region_path)
                     yield OcrRegion(image_path=region_path, region_name=region_name)
     except Exception:

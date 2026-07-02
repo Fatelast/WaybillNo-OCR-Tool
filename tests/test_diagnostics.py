@@ -14,11 +14,11 @@ def test_inspect_environment_reports_ready_tools(tmp_path: Path):
 
     results = inspect_environment(
         AppConfig(tesseract_cmd=tesseract_cmd, poppler_path=poppler_dir),
-        dependency_checker=lambda name: name in {"pytesseract", "pdf2image"},
+        dependency_checker=lambda name: name in {"PIL", "pdf2image"},
     )
 
     assert [(result.name, result.ok) for result in results] == [
-        ("pytesseract", True),
+        ("Pillow", True),
         ("pdf2image", True),
         ("Tesseract", True),
         ("Poppler", True),
@@ -33,12 +33,12 @@ def test_inspect_environment_reports_missing_dependencies_and_tools():
     )
 
     assert [(result.name, result.ok) for result in results] == [
-        ("pytesseract", False),
+        ("Pillow", False),
         ("pdf2image", False),
         ("Tesseract", False),
         ("Poppler", False),
     ]
-    assert results[0].message == "缺少 pytesseract 依赖，请安装 requirements.txt。"
+    assert results[0].message == "缺少 Pillow 依赖，请安装 requirements.txt。"
     assert results[1].message == "缺少 pdf2image 依赖，请安装 requirements.txt。"
     assert results[2].message == "未找到 Tesseract，请放置 tools/tesseract/tesseract.exe 或设置 WAYBILL_OCR_TESSERACT_CMD。"
     assert results[3].message == "未找到 Poppler，请放置 tools/poppler/pdftoppm.exe 或设置 WAYBILL_OCR_POPPLER_PATH。"

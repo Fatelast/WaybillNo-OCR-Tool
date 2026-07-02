@@ -18,20 +18,25 @@ STRONG_CANDIDATE_SCORE = 140
 def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine) -> RecognitionResult:
     started = time.perf_counter()
     combined_text = ""
+    image_iterator = None
 
     try:
-        for image_path in iter_images_for_ocr(task.source_path, config):
+        image_iterator = iter(iter_images_for_ocr(task.source_path, config))
+        for image_path in image_iterator:
             candidate_texts: list[CandidateText] = []
-            regions = iter(iter_ocr_regions(image_path))
-            full_region = next(regions, None)
-            if full_region:
-                combined_text = _recognize_region(ocr_engine, full_region, candidate_texts, combined_text)
-                full_selection = select_best_candidate_with_score(candidate_texts)
-                if full_selection and full_selection.score >= STRONG_CANDIDATE_SCORE:
-                    return _build_success_result(task, full_selection.code, combined_text, started)
+            region_iterator = iter(iter_ocr_regions(image_path, config))
+            try:
+                full_region = next(region_iterator, None)
+                if full_region:
+                    combined_text = _recognize_region(ocr_engine, full_region, candidate_texts, combined_text)
+                    full_selection = select_best_candidate_with_score(candidate_texts)
+                    if full_selection and full_selection.score >= STRONG_CANDIDATE_SCORE:
+                        return _build_success_result(task, full_selection.code, combined_text, started)
 
-            for region in regions:
-                combined_text = _recognize_region(ocr_engine, region, candidate_texts, combined_text)
+                for region in region_iterator:
+                    combined_text = _recognize_region(ocr_engine, region, candidate_texts, combined_text)
+            finally:
+                _close_iterator(region_iterator)
 
             selection = select_best_candidate_with_score(candidate_texts)
             if selection:
@@ -92,6 +97,9 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine) -> Re
             ocr_text=combined_text,
             started=started,
         )
+    finally:
+        if image_iterator is not None:
+            _close_iterator(image_iterator)
 
 
 def _recognize_region(ocr_engine: OcrEngine, region, candidate_texts: list[CandidateText], combined_text: str) -> str:
@@ -131,3 +139,9 @@ def _build_result(
         ocr_text=ocr_text,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
     )
+
+
+def _close_iterator(iterator) -> None:
+    close = getattr(iterator, "close", None)
+    if close:
+        close()
