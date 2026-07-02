@@ -119,3 +119,29 @@ def test_cli_verify_samples_prints_report_and_returns_status(monkeypatch, tmp_pa
     assert calls[0]["baseline_path"] == baseline_path
     assert calls[0]["ocr_engine"] == ("engine", AppConfig(work_dir=work_dir))
     assert stdout.getvalue() == "样本验收失败: 0/1\nwaybill.png: 未在处理结果中找到该样本\n"
+
+
+def test_cli_batch_accepts_expected_code_list(monkeypatch, tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    work_dir = tmp_path / "work"
+    expected_path = tmp_path / "expected.txt"
+    input_dir.mkdir()
+    expected_path.write_text("HNKU6331795\n", encoding="utf-8")
+    calls = []
+    stdout = StringIO()
+
+    monkeypatch.setattr(cli_module, "resolve_default_work_dir", lambda: work_dir)
+    monkeypatch.setattr(cli_module, "default_config", lambda **kwargs: AppConfig(**kwargs))
+    monkeypatch.setattr(cli_module, "TesseractEngine", lambda config: ("engine", config))
+    monkeypatch.setattr(cli_module, "read_expected_codes", lambda path: ["HNKU6331795"])
+    monkeypatch.setattr(cli_module, "process_directory", lambda **kwargs: calls.append(kwargs) or [])
+
+    exit_code = cli_module.main(
+        ["batch", "--input", str(input_dir), "--output", str(output_dir), "--expected", str(expected_path)],
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    assert calls[0]["expected_codes"] == ["HNKU6331795"]
+

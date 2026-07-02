@@ -91,3 +91,63 @@ def test_process_directory_tasks_uses_independent_work_dirs_and_shared_cancel_ev
     assert cancel_events == [cancel_event, cancel_event]
     assert any(message.startswith("[任务 1/2]") for message in progress_messages)
     assert any(message.startswith("[任务 2/2]") for message in progress_messages)
+
+
+def test_process_directory_tasks_isolates_one_group_failure(tmp_path: Path):
+    input_one = tmp_path / "input-one"
+    input_two = tmp_path / "input-two"
+    output_one = tmp_path / "output-one"
+    output_two = tmp_path / "output-two"
+    input_one.mkdir()
+    input_two.mkdir()
+    progress_messages = []
+    completed = []
+
+    def fake_process_directory(input_dir, output_dir, config, ocr_engine, on_progress, cancel_event=None):
+        if input_dir == input_one:
+            raise RuntimeError("group failed")
+        completed.append(input_dir)
+        on_progress("done")
+        return []
+
+    results = process_directory_tasks(
+        tasks=[
+            DirectoryTask(input_dir=input_one, output_dir=output_one, label="task 1/2"),
+            DirectoryTask(input_dir=input_two, output_dir=output_two, label="task 2/2"),
+        ],
+        base_config=AppConfig(work_dir=tmp_path / "work"),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+        on_progress=progress_messages.append,
+    )
+
+    assert results == []
+    assert completed == [input_two]
+    assert any("group failed" in message for message in progress_messages)
+
+
+def test_process_directory_tasks_reads_expected_codes_per_task(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    expected_path = tmp_path / "expected.txt"
+    input_dir.mkdir()
+    expected_path.write_text("HNKU6331795\n", encoding="utf-8")
+    calls = []
+
+    import waybill_ocr.ui.task_runner as task_runner_module
+
+    monkeypatch.setattr(task_runner_module, "read_expected_codes", lambda path: ["HNKU6331795"])
+
+    def fake_process_directory(*args, **kwargs):
+        calls.append(kwargs)
+        return []
+
+    process_directory_tasks(
+        tasks=[DirectoryTask(input_dir=input_dir, output_dir=output_dir, label="task", expected_codes_path=expected_path)],
+        base_config=AppConfig(work_dir=tmp_path / "work"),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+    )
+
+    assert calls[0]["expected_codes"] == ["HNKU6331795"]
+

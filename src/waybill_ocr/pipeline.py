@@ -6,7 +6,11 @@ from waybill_ocr.container_code.candidate_selector import (
     CandidateText,
     select_best_candidate_with_score,
 )
-from waybill_ocr.container_code.extractor import extract_candidates, extract_invalid_candidates
+from waybill_ocr.container_code.extractor import (
+    extract_candidates,
+    extract_invalid_candidates,
+    extract_suspicious_candidates,
+)
 from waybill_ocr.image_loader import iter_images_for_ocr
 from waybill_ocr.image_regions import OcrRegion, iter_grid_ocr_regions, iter_priority_ocr_regions
 from waybill_ocr.models import FileTask, RecognitionResult, RecognitionSource, RecognitionStatus
@@ -32,8 +36,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             combined_text = _recognize_region(ocr_engine, full_region, candidate_texts, combined_text, cancel_event)
             full_selection = select_best_candidate_with_score(candidate_texts)
             if full_selection and full_selection.score >= STRONG_CANDIDATE_SCORE:
-                return _build_success_result(task, full_selection.code, combined_text, started)
-
+                return _build_success_result(task, full_selection, combined_text, started)
             combined_text = _recognize_regions(
                 ocr_engine=ocr_engine,
                 regions=iter_priority_ocr_regions(image_path, config),
@@ -43,7 +46,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             )
             selection = select_best_candidate_with_score(candidate_texts)
             if selection:
-                return _build_success_result(task, selection.code, combined_text, started)
+                return _build_success_result(task, selection, combined_text, started)
 
             combined_text = _recognize_regions(
                 ocr_engine=ocr_engine,
@@ -54,7 +57,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             )
             selection = select_best_candidate_with_score(candidate_texts)
             if selection:
-                return _build_success_result(task, selection.code, combined_text, started)
+                return _build_success_result(task, selection, combined_text, started)
 
             invalid_candidates = extract_invalid_candidates(combined_text)
             if invalid_candidates:
@@ -68,29 +71,9 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                     started=started,
                 )
 
-        filename_candidates = extract_candidates(task.source_path.stem)
-        if filename_candidates:
-            return _build_result(
-                task=task,
-                status=RecognitionStatus.SUCCESS,
-                container_code=filename_candidates[0],
-                source=RecognitionSource.FILENAME,
-                failure_reason=None,
-                ocr_text=combined_text,
-                started=started,
-            )
-
-        invalid_filename_candidates = extract_invalid_candidates(task.source_path.stem)
-        if invalid_filename_candidates:
-            return _build_result(
-                task=task,
-                status=RecognitionStatus.INVALID,
-                container_code=invalid_filename_candidates[0],
-                source=RecognitionSource.FILENAME,
-                failure_reason="INVALID_CHECK_DIGIT",
-                ocr_text=combined_text,
-                started=started,
-            )
+        filename_result = _filename_fallback_result(task, combined_text, started)
+        if filename_result:
+            return filename_result
 
         return _build_result(
             task=task,
@@ -100,6 +83,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             failure_reason="NO_CONTAINER_CANDIDATE",
             ocr_text=combined_text,
             started=started,
+            review_note=_suspicious_note(combined_text),
         )
     except ProcessingCancelled:
         raise
@@ -116,6 +100,34 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
     finally:
         if image_iterator is not None:
             _close_iterator(image_iterator)
+
+
+def _filename_fallback_result(task: FileTask, ocr_text: str, started: float) -> RecognitionResult | None:
+    filename_candidates = extract_candidates(task.source_path.stem)
+    if filename_candidates:
+        return _build_result(
+            task=task,
+            status=RecognitionStatus.SUCCESS,
+            container_code=filename_candidates[0],
+            source=RecognitionSource.FILENAME,
+            failure_reason=None,
+            ocr_text=ocr_text,
+            started=started,
+        )
+
+    invalid_filename_candidates = extract_invalid_candidates(task.source_path.stem)
+    if invalid_filename_candidates:
+        return _build_result(
+            task=task,
+            status=RecognitionStatus.INVALID,
+            container_code=invalid_filename_candidates[0],
+            source=RecognitionSource.FILENAME,
+            failure_reason="INVALID_CHECK_DIGIT",
+            ocr_text=ocr_text,
+            started=started,
+        )
+
+    return None
 
 
 def _recognize_regions(
@@ -147,16 +159,36 @@ def _recognize_region(
     return f"{combined_text}\n[{region.region_name}]\n{ocr_result.text}"
 
 
-def _build_success_result(task: FileTask, container_code: str, ocr_text: str, started: float) -> RecognitionResult:
+def _build_success_result(task: FileTask, selection, ocr_text: str, started: float) -> RecognitionResult:
     return _build_result(
         task=task,
         status=RecognitionStatus.SUCCESS,
-        container_code=container_code,
-        source=RecognitionSource.OCR,
+        container_code=selection.code,
+        source=_selection_source(selection),
         failure_reason=None,
         ocr_text=ocr_text,
         started=started,
+        review_note=_selection_review_note(selection),
     )
+
+
+def _selection_source(selection) -> RecognitionSource:
+    if selection.is_repaired:
+        return RecognitionSource.OCR_REPAIRED
+    return RecognitionSource.OCR
+
+
+def _selection_review_note(selection) -> str | None:
+    if selection.is_repaired and selection.raw_candidate:
+        return f"OCR\u4fee\u6b63\u539f\u59cb\u7247\u6bb5: {selection.raw_candidate}"
+    return None
+
+
+def _suspicious_note(ocr_text: str) -> str | None:
+    candidates = extract_suspicious_candidates(ocr_text)
+    if not candidates:
+        return None
+    return f"\u7591\u4f3c\u5019\u9009: {', '.join(candidates)}"
 
 
 def _build_result(
@@ -167,6 +199,7 @@ def _build_result(
     failure_reason: str | None,
     ocr_text: str,
     started: float,
+    review_note: str | None = None,
 ) -> RecognitionResult:
     return RecognitionResult(
         source_path=task.source_path,
@@ -177,6 +210,7 @@ def _build_result(
         failure_reason=failure_reason,
         ocr_text=ocr_text,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
+        review_note=review_note,
     )
 
 

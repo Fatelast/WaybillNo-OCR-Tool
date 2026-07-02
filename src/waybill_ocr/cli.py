@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import TextIO
 
 from waybill_ocr.batch_processor import process_directory
+from waybill_ocr.container_code.expected_codes import read_expected_codes
 from waybill_ocr.config import default_config, resolve_default_work_dir
 from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
@@ -42,6 +43,7 @@ def _build_parser() -> argparse.ArgumentParser:
     batch_parser = subparsers.add_parser("batch", help="批量处理输入目录")
     batch_parser.add_argument("--input", required=True, dest="input_dir", help="输入文件夹")
     batch_parser.add_argument("--output", required=True, dest="output_dir", help="输出文件夹")
+    batch_parser.add_argument("--expected", dest="expected_path", help="预期箱号清单（txt/csv/xlsx，可选）")
 
     sample_parser = subparsers.add_parser("verify-samples", help="按样本基线验收 OCR 结果")
     sample_parser.add_argument("--input", default=str(DEFAULT_SAMPLE_INPUT), dest="input_dir", help="样本输入文件夹")
@@ -71,6 +73,14 @@ def _run_batch(args: argparse.Namespace, stdout: TextIO) -> int:
         print(f"输入文件夹不存在: {input_dir}", file=stdout)
         return 2
 
+    expected_codes = None
+    if args.expected_path:
+        expected_path = Path(args.expected_path)
+        if not expected_path.is_file():
+            print(f"预期箱号清单不存在: {expected_path}", file=stdout)
+            return 2
+        expected_codes = read_expected_codes(expected_path)
+
     config = default_config(work_dir=resolve_default_work_dir())
     engine = TesseractEngine(config)
     process_directory(
@@ -79,6 +89,7 @@ def _run_batch(args: argparse.Namespace, stdout: TextIO) -> int:
         config=config,
         ocr_engine=engine,
         on_progress=lambda message: print(message, file=stdout),
+        expected_codes=expected_codes,
     )
     return 0
 

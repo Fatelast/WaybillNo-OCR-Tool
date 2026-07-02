@@ -1,4 +1,4 @@
-__pycache__/
+﻿__pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
@@ -9,7 +9,7 @@ build/
 log/
 logs/
 /output/
-识别结果.xlsx
+璇嗗埆缁撴灉.xlsx
 samples/input/*
 !samples/input/.gitkeep
 samples/actual/*
@@ -18,3 +18,6 @@ pytest-cache-files-*/
 .idea/
 local-env.ps1
 .tmp/
+.codegraph/
+.pytest-tmp/
+

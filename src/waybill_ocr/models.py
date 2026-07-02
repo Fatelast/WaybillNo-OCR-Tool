@@ -11,6 +11,7 @@ class RecognitionStatus(str, Enum):
 
 class RecognitionSource(str, Enum):
     OCR = "OCR"
+    OCR_REPAIRED = "OCR\u4fee\u6b63"
     FILENAME = "文件名"
     MANUAL = "人工修正"
 
@@ -32,3 +33,4 @@ class RecognitionResult:
     failure_reason: str | None
     ocr_text: str
     elapsed_ms: int
+    review_note: str | None = None

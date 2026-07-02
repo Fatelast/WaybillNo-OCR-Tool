@@ -248,3 +248,84 @@ def test_process_file_falls_back_to_grid_when_priority_regions_have_no_candidate
 
     assert result.status == RecognitionStatus.SUCCESS
     assert result.container_code == "GESU5903360"
+
+
+
+def test_process_file_uses_filename_after_first_pdf_page_has_no_code(tmp_path: Path, monkeypatch):
+    first_page = tmp_path / "page-1.png"
+    second_page = tmp_path / "page-2.png"
+    first_page.write_bytes(b"fake")
+    second_page.write_bytes(b"fake")
+    task = FileTask(source_path=tmp_path / "HNKU6331795.pdf", relative_name="HNKU6331795.pdf", suffix=".pdf")
+    seen_pages = []
+
+    def fake_images(*_args):
+        for page in [first_page, second_page]:
+            seen_pages.append(page.name)
+            yield page
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", fake_images)
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+
+    result = process_file(task, AppConfig(), FakeOcrEngine("no code"))
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "HNKU6331795"
+    assert result.source == RecognitionSource.FILENAME
+    assert seen_pages == ["page-1.png", "page-2.png"]
+
+
+def test_process_file_marks_safe_repaired_ocr_source_and_note(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+
+    result = process_file(task, AppConfig(), FakeOcrEngine("OCR HINKU6331795"))
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "HNKU6331795"
+    assert result.source == RecognitionSource.OCR_REPAIRED
+    assert result.review_note == "OCR\u4fee\u6b63\u539f\u59cb\u7247\u6bb5: HINKU6331795"
+
+
+def test_process_file_records_guess_like_candidate_without_final_replacement(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+
+    result = process_file(task, AppConfig(), FakeOcrEngine("OCR HNKU633I795"))
+
+    assert result.status == RecognitionStatus.UNRECOGNIZED
+    assert result.container_code is None
+    assert result.source is None
+    assert result.failure_reason == "NO_CONTAINER_CANDIDATE"
+    assert result.review_note == "\u7591\u4f3c\u5019\u9009: HNKU633I795"
+
+
+def test_process_file_prefers_region_ocr_candidate_over_filename_fallback(monkeypatch):
+    source_path = Path("HNKU6331795.jpg")
+    priority_path = Path("priority.png")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=priority_path, region_name="priority-left-middle")],
+    )
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+
+    result = process_file(
+        task,
+        AppConfig(),
+        FakeOcrEngine({"HNKU6331795.jpg": "no code", "priority.png": "CONTAINER GESU5903360 45G1"}),
+    )
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "GESU5903360"
+    assert result.source == RecognitionSource.OCR
+

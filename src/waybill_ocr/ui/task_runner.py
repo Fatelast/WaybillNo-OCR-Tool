@@ -4,7 +4,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from waybill_ocr.batch_processor import process_directory
+from waybill_ocr.cancellation import ProcessingCancelled
 from waybill_ocr.config import AppConfig
+from waybill_ocr.container_code.expected_codes import read_expected_codes
 from waybill_ocr.models import RecognitionResult
 
 ProgressCallback = Callable[[str], None]
@@ -17,6 +19,7 @@ class DirectoryTask:
     input_dir: Path
     output_dir: Path
     label: str
+    expected_codes_path: Path | None = None
 
 
 def process_directory_tasks(
@@ -69,14 +72,26 @@ def _process_one_task(
         if on_progress:
             on_progress(f"[{task.label}] {message}")
 
-    return process_directory_func(
-        task.input_dir,
-        task.output_dir,
-        config,
-        engine,
-        prefixed_progress,
-        cancel_event=cancel_event,
-    )
+    expected_codes = read_expected_codes(task.expected_codes_path) if task.expected_codes_path else None
+    kwargs = {"cancel_event": cancel_event}
+    if expected_codes is not None:
+        kwargs["expected_codes"] = expected_codes
+
+    try:
+        return process_directory_func(
+            task.input_dir,
+            task.output_dir,
+            config,
+            engine,
+            prefixed_progress,
+            **kwargs,
+        )
+    except ProcessingCancelled:
+        prefixed_progress("已取消")
+        return []
+    except Exception as exc:
+        prefixed_progress(f"任务处理失败，已跳过该任务: {exc}")
+        return []
 
 
 def _task_config(base_config: AppConfig, task_number: int) -> AppConfig:

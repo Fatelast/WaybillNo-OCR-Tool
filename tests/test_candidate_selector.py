@@ -21,3 +21,21 @@ def test_select_best_candidate_ignores_non_u_candidate():
     )
 
     assert candidate == "GESU5903360"
+
+
+
+def test_select_best_candidate_uses_repaired_candidate_only_when_no_clear_candidate():
+    candidate = select_best_candidate([CandidateText(text="OCR HINKU6331795", region_name="full")])
+
+    assert candidate == "HNKU6331795"
+
+
+def test_select_best_candidate_does_not_let_repaired_candidate_override_clear_candidate():
+    candidate = select_best_candidate(
+        [
+            CandidateText(text="OCR HINKU6331795", region_name="priority-left-middle"),
+            CandidateText(text="CONTAINER GESU5903360 45G1", region_name="priority-left-middle"),
+        ]
+    )
+
+    assert candidate == "GESU5903360"

@@ -24,3 +24,22 @@ def test_extract_deduplicates_candidates():
 def test_extract_ignores_non_u_category_identifier():
     text = "噪声 IJIP 5617782 真正箱号 GESU5903360P45G130"
     assert extract_candidates(text) == ["GESU5903360"]
+
+
+
+def test_extract_repaired_candidate_removes_one_extra_owner_letter_when_valid():
+    from waybill_ocr.container_code.extractor import extract_repaired_candidates
+
+    assert extract_repaired_candidates("OCR HINKU6331795") == ["HNKU6331795"]
+
+
+def test_extract_repaired_candidate_rejects_unvalidated_repairs():
+    from waybill_ocr.container_code.extractor import extract_repaired_candidates
+
+    assert extract_repaired_candidates("OCR HINKU6331794") == []
+
+
+def test_extract_repaired_candidate_does_not_do_digit_letter_guessing():
+    from waybill_ocr.container_code.extractor import extract_repaired_candidates
+
+    assert extract_repaired_candidates("OCR HNKU633I795") == []

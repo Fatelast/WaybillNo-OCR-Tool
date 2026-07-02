@@ -262,7 +262,7 @@ def test_process_directory_writes_backup_workbook_when_default_workbook_is_locke
             elapsed_ms=1,
         )
 
-    def fake_write_results(results, output_dir: Path, workbook_path: Path | None = None) -> Path:
+    def fake_write_results(results, output_dir: Path, workbook_path: Path | None = None, comparison_report=None) -> Path:
         workbook_paths.append(workbook_path)
         if workbook_path is None:
             raise PermissionError("workbook is open")
@@ -286,3 +286,136 @@ def test_process_directory_writes_backup_workbook_when_default_workbook_is_locke
     assert workbook_paths[0] is None
     assert workbook_paths[1] is not None
     assert any("识别结果.xlsx 被占用" in message for message in progress_messages)
+
+
+def test_process_directory_records_failed_file_and_continues(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    first_path = input_dir / "first.jpg"
+    second_path = input_dir / "second.jpg"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    processed = []
+    progress_messages = []
+
+    def fake_process_file(
+        task: FileTask,
+        _config: AppConfig,
+        _ocr_engine: FakeOcrEngine,
+        cancel_event=None,
+    ) -> RecognitionResult:
+        processed.append(task.relative_name)
+        if task.relative_name == "first.jpg":
+            raise RuntimeError("ocr crashed")
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        on_progress=progress_messages.append,
+    )
+
+    assert processed == ["first.jpg", "second.jpg"]
+    assert [result.original_name for result in results] == ["first.jpg", "second.jpg"]
+    assert results[0].status is RecognitionStatus.UNRECOGNIZED
+    assert results[0].failure_reason == "PROCESS_FAILED: ocr crashed"
+    assert results[1].status is RecognitionStatus.SUCCESS
+    assert any("first.jpg" in message and "ocr crashed" in message for message in progress_messages)
+
+
+def test_process_directory_keeps_processing_when_workbook_write_fails(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    first_path = input_dir / "first.jpg"
+    second_path = input_dir / "second.jpg"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    progress_messages = []
+
+    def fake_process_file(
+        task: FileTask,
+        _config: AppConfig,
+        _ocr_engine: FakeOcrEngine,
+        cancel_event=None,
+    ) -> RecognitionResult:
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    def fake_write_results(results, output_dir: Path, workbook_path: Path | None = None, comparison_report=None) -> Path:
+        raise PermissionError("workbook is open")
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+    monkeypatch.setattr(batch_module, "write_results", fake_write_results)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        on_progress=progress_messages.append,
+    )
+
+    assert [result.original_name for result in results] == ["first.jpg", "second.jpg"]
+    assert all(result.status is RecognitionStatus.SUCCESS for result in results)
+    assert any("workbook is open" in message for message in progress_messages)
+
+
+def test_process_directory_logs_expected_code_comparison(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    progress_messages = []
+
+    def fake_process_file(task, _config, _ocr_engine, cancel_event=None):
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        on_progress=progress_messages.append,
+        expected_codes=["HNKU6331795", "GESU5903360"],
+    )
+
+    assert "箱号比对: 已匹配 1, 缺失 1, 多余 0" in progress_messages
+    assert "缺失箱号: GESU5903360" in progress_messages
+    workbook = load_workbook(output_dir / "识别结果.xlsx")
+    assert "箱号比对" in workbook.sheetnames
+
