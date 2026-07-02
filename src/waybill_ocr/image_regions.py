@@ -14,7 +14,18 @@ class OcrRegion:
 
 def iter_ocr_regions(image_path: Path, config: AppConfig) -> Iterator[OcrRegion]:
     yield OcrRegion(image_path=image_path, region_name="full")
+    yield from iter_grid_ocr_regions(image_path, config)
 
+
+def iter_priority_ocr_regions(image_path: Path, config: AppConfig) -> Iterator[OcrRegion]:
+    yield from _iter_cropped_regions(image_path, config, _priority_regions)
+
+
+def iter_grid_ocr_regions(image_path: Path, config: AppConfig) -> Iterator[OcrRegion]:
+    yield from _iter_cropped_regions(image_path, config, _grid_regions)
+
+
+def _iter_cropped_regions(image_path: Path, config: AppConfig, region_builder) -> Iterator[OcrRegion]:
     try:
         from PIL import Image
 
@@ -24,12 +35,30 @@ def iter_ocr_regions(image_path: Path, config: AppConfig) -> Iterator[OcrRegion]
                 return
 
             with temporary_directory(config) as temp_dir:
-                for region_name, box in _grid_regions(width, height):
+                for region_name, box in region_builder(width, height):
                     region_path = temp_dir / f"{region_name}.png"
                     image.crop(box).save(region_path)
                     yield OcrRegion(image_path=region_path, region_name=region_name)
     except Exception:
         return
+
+
+def _priority_regions(width: int, height: int) -> list[tuple[str, tuple[int, int, int, int]]]:
+    return [
+        ("priority-left-middle", _box(width, height, 0.00, 0.42, 0.58, 0.66)),
+        ("priority-left-upper", _box(width, height, 0.00, 0.08, 0.62, 0.34)),
+        ("priority-full-middle", _box(width, height, 0.00, 0.36, 1.00, 0.68)),
+        ("priority-left-lower-middle", _box(width, height, 0.00, 0.54, 0.64, 0.82)),
+    ]
+
+
+def _box(width: int, height: int, left: float, top: float, right: float, bottom: float) -> tuple[int, int, int, int]:
+    return (
+        max(0, int(width * left)),
+        max(0, int(height * top)),
+        min(width, int(width * right)),
+        min(height, int(height * bottom)),
+    )
 
 
 def _grid_regions(width: int, height: int) -> list[tuple[str, tuple[int, int, int, int]]]:

@@ -9,7 +9,7 @@ from waybill_ocr.models import RecognitionResult
 HEADERS = ["原始文件名", "识别箱号", "识别状态", "识别来源", "失败原因", "处理耗时ms"]
 
 
-def write_results(results: list[RecognitionResult], output_dir: Path) -> Path:
+def write_results(results: list[RecognitionResult], output_dir: Path, workbook_path: Path | None = None) -> Path:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "识别结果"
@@ -28,6 +28,6 @@ def write_results(results: list[RecognitionResult], output_dir: Path) -> Path:
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    workbook_path = output_dir / RESULT_WORKBOOK_NAME
-    workbook.save(workbook_path)
-    return workbook_path
+    target_path = workbook_path or output_dir / RESULT_WORKBOOK_NAME
+    workbook.save(target_path)
+    return target_path

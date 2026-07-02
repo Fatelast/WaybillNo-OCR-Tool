@@ -11,7 +11,7 @@ class FakeOcrEngine:
     def __init__(self, text_or_texts: str | dict[str, str]) -> None:
         self.text_or_texts = text_or_texts
 
-    def recognize_image(self, image_path: Path) -> OcrResult:
+    def recognize_image(self, image_path: Path, cancel_event=None) -> OcrResult:
         if isinstance(self.text_or_texts, dict):
             text = self.text_or_texts.get(image_path.name, "")
         else:
@@ -79,21 +79,25 @@ def test_process_file_returns_invalid_when_text_contains_bad_check_digit(tmp_pat
     assert result.failure_reason == "INVALID_CHECK_DIGIT"
 
 
-def test_process_file_prefers_region_candidate_over_full_page_noise(tmp_path: Path, monkeypatch):
+def test_process_file_prefers_priority_region_candidate_over_full_page_noise(tmp_path: Path, monkeypatch):
     source_path = tmp_path / "waybill.jpg"
     source_path.write_bytes(b"fake")
-    region_path = tmp_path / "cell-r5-c1.png"
+    region_path = tmp_path / "priority.png"
     region_path.write_bytes(b"fake")
     task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+    grid_called = False
+
+    def fake_grid(*_args):
+        nonlocal grid_called
+        grid_called = True
+        return []
 
     monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
     monkeypatch.setattr(
-        "waybill_ocr.pipeline.iter_ocr_regions",
-        lambda image_path, config: [
-            OcrRegion(image_path=image_path, region_name="full"),
-            OcrRegion(image_path=region_path, region_name="cell-r5-c1"),
-        ],
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=region_path, region_name="priority-left-middle")],
     )
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", fake_grid)
 
     result = process_file(
         task,
@@ -101,7 +105,7 @@ def test_process_file_prefers_region_candidate_over_full_page_noise(tmp_path: Pa
         FakeOcrEngine(
             {
                 "waybill.jpg": "YBXKIKOOMIJIP 5617782 J0YBEXK",
-                "cell-r5-c1.png": "GESU5903360P45G130",
+                "priority.png": "GESU5903360P45G130",
             }
         ),
     )
@@ -109,17 +113,17 @@ def test_process_file_prefers_region_candidate_over_full_page_noise(tmp_path: Pa
     assert result.status == RecognitionStatus.SUCCESS
     assert result.container_code == "GESU5903360"
     assert result.source == RecognitionSource.OCR
+    assert grid_called is False
 
-def test_process_file_closes_iterators_when_full_page_candidate_returns_early(tmp_path: Path, monkeypatch):
+def test_process_file_closes_image_iterator_when_full_page_candidate_returns_early(tmp_path: Path, monkeypatch):
     source_path = tmp_path / "waybill.jpg"
     source_path.write_bytes(b"fake")
     task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
-    closed = {"images": False, "regions": False}
+    closed = {"images": False}
 
     class ClosableIterator:
-        def __init__(self, values, close_key: str) -> None:
+        def __init__(self, values) -> None:
             self.values = iter(values)
-            self.close_key = close_key
 
         def __iter__(self):
             return self
@@ -128,18 +132,119 @@ def test_process_file_closes_iterators_when_full_page_candidate_returns_early(tm
             return next(self.values)
 
         def close(self) -> None:
-            closed[self.close_key] = True
+            closed["images"] = True
 
     def fake_images(*_args):
-        return ClosableIterator([source_path], "images")
-
-    def fake_regions(*_args):
-        return ClosableIterator([OcrRegion(image_path=source_path, region_name="full")], "regions")
+        return ClosableIterator([source_path])
 
     monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", fake_images)
-    monkeypatch.setattr("waybill_ocr.pipeline.iter_ocr_regions", fake_regions)
 
     result = process_file(task, AppConfig(), FakeOcrEngine("HNKU6331795 45G1"))
 
     assert result.status == RecognitionStatus.SUCCESS
-    assert closed == {"images": True, "regions": True}
+    assert closed == {"images": True}
+
+
+def test_process_file_stops_between_regions_when_cancelled(tmp_path: Path, monkeypatch):
+    import threading
+
+    from waybill_ocr.cancellation import ProcessingCancelled
+
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    priority_path = tmp_path / "priority.png"
+    priority_path.write_bytes(b"fake")
+    grid_path = tmp_path / "grid.png"
+    grid_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+    cancel_event = threading.Event()
+
+    class CancellingOcrEngine:
+        def __init__(self) -> None:
+            self.seen = []
+
+        def recognize_image(self, image_path: Path, cancel_event=None) -> OcrResult:
+            self.seen.append(image_path.name)
+            if image_path.name == "priority.png":
+                cancel_event.set()
+            return OcrResult(text="no code", engine_name="fake", elapsed_ms=1)
+
+    engine = CancellingOcrEngine()
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=priority_path, region_name="priority-left-middle")],
+    )
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_grid_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=grid_path, region_name="cell-r1-c1")],
+    )
+
+    try:
+        process_file(task, AppConfig(), engine, cancel_event=cancel_event)
+    except ProcessingCancelled:
+        pass
+
+    assert engine.seen == ["waybill.jpg", "priority.png"]
+
+
+def test_process_file_returns_priority_candidate_without_full_grid(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    priority_path = tmp_path / "priority.png"
+    priority_path.write_bytes(b"fake")
+    grid_path = tmp_path / "grid.png"
+    grid_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+    grid_called = False
+
+    def fake_grid(*_args):
+        nonlocal grid_called
+        grid_called = True
+        return [OcrRegion(image_path=grid_path, region_name="cell-r1-c1")]
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=priority_path, region_name="priority-left-middle")],
+    )
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", fake_grid)
+
+    result = process_file(
+        task,
+        AppConfig(),
+        FakeOcrEngine({"waybill.jpg": "no code", "priority.png": "GESU5903360P45G130"}),
+    )
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "GESU5903360"
+    assert grid_called is False
+
+
+def test_process_file_falls_back_to_grid_when_priority_regions_have_no_candidate(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    priority_path = tmp_path / "priority.png"
+    priority_path.write_bytes(b"fake")
+    grid_path = tmp_path / "grid.png"
+    grid_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=priority_path, region_name="priority-left-middle")],
+    )
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_grid_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=grid_path, region_name="cell-r5-c1")],
+    )
+
+    result = process_file(
+        task,
+        AppConfig(),
+        FakeOcrEngine({"waybill.jpg": "no code", "priority.png": "still no code", "grid.png": "GESU5903360P45G130"}),
+    )
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "GESU5903360"

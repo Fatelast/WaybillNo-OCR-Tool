@@ -55,3 +55,9 @@ def test_resolve_default_work_dir_allows_environment_override(tmp_path: Path):
     work_dir = resolve_default_work_dir(env={"WAYBILL_OCR_WORK_DIR": str(custom_work_dir)})
 
     assert work_dir == custom_work_dir
+
+
+def test_default_config_defaults_to_zero_ocr_retries(tmp_path: Path):
+    config = default_config(base_dir=tmp_path, env={})
+
+    assert config.ocr_retries == 0

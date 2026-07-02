@@ -69,7 +69,7 @@ def _resolve_poppler_path(base_dir: Path, env: Mapping[str, str]) -> Path | None
 def _resolve_ocr_retries(env: Mapping[str, str]) -> int:
     raw_value = env.get("WAYBILL_OCR_RETRIES")
     if raw_value is None:
-        return 2
+        return 0
 
     try:
         retries = int(raw_value)

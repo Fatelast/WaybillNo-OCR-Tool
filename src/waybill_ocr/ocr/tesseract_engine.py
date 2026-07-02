@@ -3,7 +3,9 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
+from waybill_ocr.cancellation import ProcessingCancelled, is_cancelled
 from waybill_ocr.config import AppConfig
 from waybill_ocr.ocr.base import OcrResult
 
@@ -16,27 +18,34 @@ TESSERACT_ARGS = [
     "-c",
     "tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
 ]
-CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
+OCR_TIMEOUT_SECONDS = 60
+POLL_INTERVAL_SECONDS = 0.05
+ProcessFactory = Callable[..., Any]
 
 
 class TesseractEngine:
-    def __init__(self, config: AppConfig, command_runner: CommandRunner | None = None) -> None:
+    def __init__(self, config: AppConfig, process_factory: ProcessFactory | None = None) -> None:
         self.config = config
-        self._command_runner = command_runner or subprocess.run
+        self._process_factory = process_factory or subprocess.Popen
 
-    def recognize_image(self, image_path: Path) -> OcrResult:
+    def recognize_image(self, image_path: Path, cancel_event=None) -> OcrResult:
         started = time.perf_counter()
         text = ""
         last_error = ""
 
         for _ in range(self.config.ocr_retries + 1):
-            completed = self._command_runner(
+            process = self._process_factory(
                 self._build_command(image_path),
-                **self._subprocess_options(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self._subprocess_env(),
+                **self._window_options(),
             )
-            text = completed.stdout or ""
-            last_error = completed.stderr or ""
-            if completed.returncode == 0 and text.strip():
+            stdout, stderr, returncode = self._wait_for_process(process, cancel_event)
+            text = stdout or ""
+            last_error = stderr or ""
+            if returncode == 0 and text.strip():
                 break
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -46,15 +55,23 @@ class TesseractEngine:
 
         return OcrResult(text=text, engine_name="tesseract", elapsed_ms=elapsed_ms)
 
+    def _wait_for_process(self, process, cancel_event) -> tuple[str, str, int | None]:
+        deadline = time.perf_counter() + OCR_TIMEOUT_SECONDS
+        while process.poll() is None:
+            if is_cancelled(cancel_event):
+                _terminate_process(process)
+                raise ProcessingCancelled()
+            if time.perf_counter() >= deadline:
+                _kill_process(process)
+                raise RuntimeError("Tesseract OCR 超时")
+            time.sleep(POLL_INTERVAL_SECONDS)
+
+        stdout, stderr = process.communicate()
+        return stdout or "", stderr or "", process.returncode
+
     def _build_command(self, image_path: Path) -> list[str]:
         executable = self.config.tesseract_cmd or Path("tesseract")
         return [str(executable), str(image_path), "stdout", *self._tessdata_args(), *TESSERACT_ARGS]
-
-    def _subprocess_options(self) -> dict:
-        options = {"capture_output": True, "text": True, "timeout": 60, "env": self._subprocess_env()}
-        if hasattr(subprocess, "CREATE_NO_WINDOW"):
-            options["creationflags"] = subprocess.CREATE_NO_WINDOW
-        return options
 
     def _subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -62,6 +79,11 @@ class TesseractEngine:
         if tessdata_dir:
             env["TESSDATA_PREFIX"] = str(tessdata_dir)
         return env
+
+    def _window_options(self) -> dict:
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            return {"creationflags": subprocess.CREATE_NO_WINDOW}
+        return {}
 
     def _tessdata_args(self) -> list[str]:
         tessdata_dir = self._tessdata_dir()
@@ -78,3 +100,19 @@ class TesseractEngine:
             return tessdata_dir
 
         return None
+
+
+def _terminate_process(process) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except Exception:
+        _kill_process(process)
+
+
+def _kill_process(process) -> None:
+    process.kill()
+    try:
+        process.wait(timeout=2)
+    except Exception:
+        pass
