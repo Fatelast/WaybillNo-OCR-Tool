@@ -113,106 +113,71 @@ class MainWindow:
 
     def _build_task_section(self, parent: tk.Frame) -> None:
         section = tk.Frame(parent, bg=BG_COLOR)
-        section.grid(row=1, column=0, sticky=tk.EW, pady=(10, 0))
+        section.grid(row=1, column=0, sticky=tk.EW, pady=(8, 0))
         section.columnconfigure(0, weight=1)
 
         for index in range(MAX_TASKS):
             task_frame = tk.Frame(
                 section,
                 bg=SURFACE_COLOR,
-                padx=12,
-                pady=8,
+                padx=10,
+                pady=6,
                 highlightbackground=BORDER_COLOR,
                 highlightthickness=1,
             )
-            task_frame.grid(row=index, column=0, sticky=tk.EW, pady=(0, 6))
+            task_frame.grid(row=index, column=0, sticky=tk.EW, pady=(0, 5))
             task_frame.columnconfigure(1, weight=1)
 
             input_var = tk.StringVar()
             output_var = tk.StringVar()
             expected_var = tk.StringVar()
-            badge_text = "必填" if index == 0 else "可选"
+            badge_text = "\u5fc5\u586b" if index == 0 else "\u53ef\u9009"
             badge_bg = "#dbeafe" if index == 0 else "#eef2f7"
             badge_fg = PRIMARY_COLOR if index == 0 else MUTED_TEXT_COLOR
 
+            header_box = tk.Frame(task_frame, bg=SURFACE_COLOR)
+            header_box.grid(row=0, column=0, sticky=tk.W, pady=(0, 4))
             tk.Label(
-                task_frame,
-                text=f"任务 {index + 1}",
+                header_box,
+                text=f"\u4efb\u52a1 {index + 1}",
                 bg=SURFACE_COLOR,
                 fg=TEXT_COLOR,
                 font=(FONT_FAMILY, 10, "bold"),
-            ).grid(row=0, column=0, sticky=tk.W, pady=(0, 6))
+            ).grid(row=0, column=0, sticky=tk.W)
             tk.Label(
-                task_frame,
+                header_box,
                 text=badge_text,
                 bg=badge_bg,
                 fg=badge_fg,
                 padx=7,
                 pady=2,
                 font=(FONT_FAMILY, 8, "bold"),
-            ).grid(row=0, column=1, sticky=tk.W, pady=(0, 6))
-
-            input_entry, input_button = self._build_path_field(
-                task_frame,
-                1,
-                "输入文件夹",
-                input_var,
-                lambda task_index=index: self._choose_input(task_index),
-            )
-            output_entry, output_button = self._build_path_field(
-                task_frame,
-                2,
-                "输出文件夹",
-                output_var,
-                lambda task_index=index: self._choose_output(task_index),
-            )
-            expected_entry, expected_button = self._build_path_field(
-                task_frame,
-                3,
-                "预期箱号清单（非必选）",
-                expected_var,
-                lambda task_index=index: self._choose_expected(task_index),
-            )
-            tk.Label(
-                task_frame,
-                text="选择文件，不是文件夹。支持 .txt / .csv / .xlsx；推荐每行一个箱号，例如 GESU5903360。",
-                bg=SURFACE_COLOR,
-                fg=MUTED_TEXT_COLOR,
-                font=(FONT_FAMILY, 8),
-                anchor=tk.W,
-            ).grid(row=4, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 1))
-
-            expected_status_var = tk.StringVar(value="\u9884\u671f\u6e05\u5355\uff1a\u975e\u5fc5\u9009")
-            expected_status_label = tk.Label(
-                task_frame,
-                textvariable=expected_status_var,
-                bg=SURFACE_COLOR,
-                fg=MUTED_TEXT_COLOR,
-                font=(FONT_FAMILY, 8),
-                anchor=tk.W,
-            )
-            expected_status_label.grid(row=5, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 3))
+            ).grid(row=0, column=1, sticky=tk.W, padx=(8, 0))
 
             progress_text_var = tk.StringVar(value="\u5f85\u5904\u7406")
             summary_var = tk.StringVar(value="\u5df2\u5904\u7406 0/0 | \u6210\u529f 0 | \u672a\u8bc6\u522b 0 | \u7bb1\u53f7\u9519\u8bef 0")
+            progress_cell = tk.Frame(task_frame, bg=SURFACE_COLOR)
+            progress_cell.grid(row=0, column=1, sticky=tk.EW, padx=(8, 8), pady=(0, 4))
+            progress_cell.columnconfigure(1, weight=1)
             tk.Label(
-                task_frame,
+                progress_cell,
                 textvariable=progress_text_var,
                 bg=SURFACE_COLOR,
                 fg=TEXT_COLOR,
                 font=(FONT_FAMILY, 8, "bold"),
                 anchor=tk.W,
-            ).grid(row=6, column=0, sticky=tk.W, pady=(3, 1))
+            ).grid(row=0, column=0, sticky=tk.W)
             tk.Label(
-                task_frame,
+                progress_cell,
                 textvariable=summary_var,
                 bg=SURFACE_COLOR,
                 fg=MUTED_TEXT_COLOR,
                 font=(FONT_FAMILY, 8),
-                anchor=tk.W,
-            ).grid(row=6, column=1, sticky=tk.W, padx=(8, 0), pady=(3, 1))
-            progressbar = ttk.Progressbar(task_frame, mode="determinate", maximum=1, value=0, style="Horizontal.TProgressbar")
-            progressbar.grid(row=7, column=0, columnspan=2, sticky=tk.EW, pady=(1, 0))
+                anchor=tk.E,
+            ).grid(row=0, column=1, sticky=tk.E)
+            progressbar = ttk.Progressbar(progress_cell, mode="determinate", maximum=1, value=0, style="Horizontal.TProgressbar")
+            progressbar.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(2, 0))
+
             open_button = tk.Button(
                 task_frame,
                 text="\u6253\u5f00\u8f93\u51fa",
@@ -229,7 +194,42 @@ class MainWindow:
                 font=(FONT_FAMILY, 8, "bold"),
                 state=tk.DISABLED,
             )
-            open_button.grid(row=7, column=2, sticky=tk.E, pady=(1, 0))
+            open_button.grid(row=0, column=2, sticky=tk.E, pady=(0, 4))
+
+            input_entry, input_button = self._build_path_field(
+                task_frame,
+                1,
+                "\u8f93\u5165\u6587\u4ef6\u5939",
+                input_var,
+                lambda task_index=index: self._choose_input(task_index),
+            )
+            output_entry, output_button = self._build_path_field(
+                task_frame,
+                2,
+                "\u8f93\u51fa\u6587\u4ef6\u5939",
+                output_var,
+                lambda task_index=index: self._choose_output(task_index),
+            )
+            expected_entry, expected_button = self._build_path_field(
+                task_frame,
+                3,
+                "\u9884\u671f\u7bb1\u53f7\u6e05\u5355\uff08\u975e\u5fc5\u9009\uff09",
+                expected_var,
+                lambda task_index=index: self._choose_expected(task_index),
+            )
+
+            expected_status_var = tk.StringVar(
+                value="\u9884\u671f\u6e05\u5355\uff1a\u975e\u5fc5\u9009\uff1b\u652f\u6301 .txt / .csv / .xlsx\uff1b\u5efa\u8bae\u6bcf\u884c\u4e00\u4e2a\u7bb1\u53f7\u3002"
+            )
+            expected_status_label = tk.Label(
+                task_frame,
+                textvariable=expected_status_var,
+                bg=SURFACE_COLOR,
+                fg=MUTED_TEXT_COLOR,
+                font=(FONT_FAMILY, 8),
+                anchor=tk.W,
+            )
+            expected_status_label.grid(row=4, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 1))
 
             self.task_rows.append(
                 {
@@ -250,6 +250,7 @@ class MainWindow:
                     "expected_button": expected_button,
                 }
             )
+
 
     def _build_path_field(
         self,
