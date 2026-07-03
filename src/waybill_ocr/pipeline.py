@@ -20,6 +20,9 @@ from waybill_ocr.ocr.base import OcrEngine
 
 
 STRONG_CANDIDATE_SCORE = 140
+REGION_CROP_FAILURE_MARKER = "区域裁剪失败"
+REGION_CROP_SKIP_MARKER = "区域裁剪跳过"
+REGION_CROP_FAILURE_NOTE = "区域裁剪失败/跳过，可能图片损坏或无法读取区域"
 
 
 def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cancel_event=None) -> RecognitionResult:
@@ -86,7 +89,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             failure_reason="NO_CONTAINER_CANDIDATE",
             ocr_text=combined_text,
             started=started,
-            review_note=_suspicious_note(combined_text),
+            review_note=_final_review_note(combined_text),
         )
     except ProcessingCancelled:
         raise
@@ -134,7 +137,10 @@ def _filename_fallback_result(task: FileTask, ocr_text: str, started: float) -> 
 
 
 def _priority_regions_for_mode(image_path, config: AppConfig):
-    regions = iter_priority_ocr_regions(image_path, config)
+    try:
+        regions = iter_priority_ocr_regions(image_path, config)
+    except Exception as exc:
+        return [OcrRegion(image_path=image_path, region_name=f"{REGION_CROP_FAILURE_MARKER}: {exc}")]
     if config.ocr_speed_mode == OCR_SPEED_FAST:
         return islice(regions, 2)
     return regions
@@ -168,9 +174,17 @@ def _recognize_region(
     combined_text: str,
     cancel_event,
 ) -> str:
+    if _is_region_diagnostic(region.region_name):
+        candidate_texts.append(CandidateText(text="", region_name=region.region_name))
+        return f"{combined_text}\n[{region.region_name}]"
+
     ocr_result = ocr_engine.recognize_image(region.image_path, cancel_event=cancel_event)
     candidate_texts.append(CandidateText(text=ocr_result.text, region_name=region.region_name))
     return f"{combined_text}\n[{region.region_name}]\n{ocr_result.text}"
+
+
+def _is_region_diagnostic(region_name: str) -> bool:
+    return region_name.startswith(REGION_CROP_FAILURE_MARKER) or region_name.startswith(REGION_CROP_SKIP_MARKER)
 
 
 def _build_success_result(task: FileTask, selection, ocr_text: str, started: float) -> RecognitionResult:
@@ -198,6 +212,13 @@ def _selection_review_note(selection) -> str | None:
     return None
 
 
+def _final_review_note(ocr_text: str) -> str | None:
+    suspicious_note = _suspicious_note(ocr_text)
+    if suspicious_note:
+        return suspicious_note
+    if REGION_CROP_FAILURE_MARKER in ocr_text or REGION_CROP_SKIP_MARKER in ocr_text:
+        return REGION_CROP_FAILURE_NOTE
+    return None
 def _suspicious_note(ocr_text: str) -> str | None:
     candidates = extract_suspicious_candidates(ocr_text)
     suggestions = extract_guess_repair_suggestions(ocr_text)
@@ -234,6 +255,7 @@ def _build_result(
         failure_reason=failure_reason,
         ocr_text=ocr_text,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
+        relative_name=task.relative_name,
         review_note=review_note,
     )
 

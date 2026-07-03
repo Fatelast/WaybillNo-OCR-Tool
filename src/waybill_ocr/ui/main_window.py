@@ -36,11 +36,17 @@ LOG_FG = "#dbeafe"
 DISABLED_BG = "#e5e7eb"
 FONT_FAMILY = "Microsoft YaHei UI"
 SPEED_MODE_LABELS = {
-    OCR_SPEED_STABLE: "\u7a33\u5b9a\u6a21\u5f0f",
-    OCR_SPEED_BALANCED: "\u5747\u8861\u6a21\u5f0f",
-    OCR_SPEED_FAST: "\u5feb\u901f\u6a21\u5f0f",
+    OCR_SPEED_STABLE: "稳定模式",
+    OCR_SPEED_BALANCED: "均衡模式",
+    OCR_SPEED_FAST: "快速模式",
 }
 SPEED_MODE_VALUES = {label: mode for mode, label in SPEED_MODE_LABELS.items()}
+SPEED_MODE_DESCRIPTIONS = {
+    OCR_SPEED_STABLE: "稳定模式：适合文件模糊、版式变化大的情况，优先保证识别完整。",
+    OCR_SPEED_BALANCED: "均衡模式：适合日常批量处理，速度和准确率较均衡，推荐使用。",
+    OCR_SPEED_FAST: "快速模式：适合文件清晰且版式稳定，处理最快，但有漏识别风险。",
+}
+
 
 
 class MainWindow:
@@ -54,6 +60,7 @@ class MainWindow:
         self.task_rows = []
         self.progress_var = tk.StringVar(value="待处理")
         self.speed_mode_var = tk.StringVar(value=SPEED_MODE_LABELS[OCR_SPEED_BALANCED])
+        self.speed_description_var = tk.StringVar(value=_speed_mode_description(OCR_SPEED_BALANCED))
         self.running = False
         self.cancel_event: threading.Event | None = None
 
@@ -206,7 +213,7 @@ class MainWindow:
             output_entry, output_button = self._build_path_field(
                 task_frame,
                 2,
-                "\u8f93\u51fa\u6587\u4ef6\u5939",
+                "\u8f93\u51fa\u6587\u4ef6\u5939\uff08\u53ef\u9009\uff09",
                 output_var,
                 lambda task_index=index: self._choose_output(task_index),
             )
@@ -308,7 +315,7 @@ class MainWindow:
 
         hint = tk.Label(
             actions,
-            text="运行中会锁定路径选择；如需切换目录，请先停止当前任务。",
+            text="运行中会锁定路径选择；输出文件夹不选时自动创建“输入文件夹名_识别输出”。",
             bg=BG_COLOR,
             fg=MUTED_TEXT_COLOR,
             font=(FONT_FAMILY, 8),
@@ -332,6 +339,7 @@ class MainWindow:
             SPEED_MODE_LABELS[OCR_SPEED_STABLE],
             SPEED_MODE_LABELS[OCR_SPEED_BALANCED],
             SPEED_MODE_LABELS[OCR_SPEED_FAST],
+            command=lambda _selected: self._update_speed_description(),
         )
         self.speed_menu.config(
             bg=SURFACE_COLOR,
@@ -348,6 +356,14 @@ class MainWindow:
         )
         self.speed_menu["menu"].config(font=(FONT_FAMILY, 8))
         self.speed_menu.grid(row=0, column=1, sticky=tk.E)
+        tk.Label(
+            speed_box,
+            textvariable=self.speed_description_var,
+            bg=BG_COLOR,
+            fg=MUTED_TEXT_COLOR,
+            font=(FONT_FAMILY, 8),
+            anchor=tk.W,
+        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(3, 0))
         self.start_button = tk.Button(
             button_box,
             text="开始处理",
@@ -477,18 +493,22 @@ class MainWindow:
             input_text = row["input_var"].get().strip()
             output_text = row["output_var"].get().strip()
             expected_text = row["expected_var"].get().strip()
-            if index > 0 and not input_text and not output_text:
+            if index > 0 and not input_text and not output_text and not expected_text:
                 continue
-            if not input_text or not output_text:
-                messagebox.showerror("错误", f"任务 {index + 1} 已选择输入或输出文件夹，请同时填写另一个文件夹")
+            if not input_text:
+                messagebox.showerror("错误", f"任务 {index + 1} 请先选择输入文件夹；输出文件夹可不选，系统会自动创建")
                 return None
 
             input_dir = Path(input_text)
-            output_dir = Path(output_text)
             expected_path = Path(expected_text) if expected_text else None
             if not input_dir.is_dir():
                 messagebox.showerror("错误", f"任务 {index + 1} 输入文件夹不存在")
                 return None
+
+            output_dir = Path(output_text) if output_text else _default_output_dir_for(input_dir)
+            if not output_text:
+                row["output_var"].set(str(output_dir))
+
             if expected_path is not None and not expected_path.is_file():
                 messagebox.showerror("错误", f"任务 {index + 1} 预期箱号清单不存在")
                 return None
@@ -498,7 +518,12 @@ class MainWindow:
             raw_tasks.append((input_dir, output_dir, expected_path))
 
         if not raw_tasks:
-            messagebox.showerror("错误", "请至少填写任务 1 的输入和输出文件夹")
+            messagebox.showerror("错误", "请至少填写任务 1 的输入文件夹")
+            return None
+
+        duplicate_output = _duplicate_output_dir(raw_tasks)
+        if duplicate_output is not None:
+            messagebox.showerror("错误", f"输出文件夹不能重复：{duplicate_output}")
             return None
 
         total = len(raw_tasks)
@@ -592,6 +617,10 @@ class MainWindow:
 
     def _selected_speed_mode(self) -> str:
         return SPEED_MODE_VALUES.get(self.speed_mode_var.get(), OCR_SPEED_BALANCED)
+
+    def _update_speed_description(self) -> None:
+        speed_mode = SPEED_MODE_VALUES.get(self.speed_mode_var.get(), OCR_SPEED_BALANCED)
+        self.speed_description_var.set(_speed_mode_description(speed_mode))
 
 
     def _update_expected_status(self, task_index: int, expected_path: Path) -> None:
@@ -696,6 +725,23 @@ class MainWindow:
         os.startfile(output_dir)
 
 
+
+def _speed_mode_description(speed_mode: str) -> str:
+    return SPEED_MODE_DESCRIPTIONS.get(speed_mode, SPEED_MODE_DESCRIPTIONS[OCR_SPEED_BALANCED])
+
+
+def _duplicate_output_dir(raw_tasks) -> Path | None:
+    seen: set[Path] = set()
+    for _input_dir, output_dir, _expected_path in raw_tasks:
+        resolved_output = output_dir.resolve()
+        if resolved_output in seen:
+            return output_dir
+        seen.add(resolved_output)
+    return None
+
+
+def _default_output_dir_for(input_dir: Path) -> Path:
+    return input_dir.parent / f"{input_dir.name}_识别输出"
 
 def _is_input_inside_output(input_dir: Path, output_dir: Path) -> bool:
     resolved_input = input_dir.resolve()

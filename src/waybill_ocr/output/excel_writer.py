@@ -17,9 +17,10 @@ HEADERS = [
     "处理耗时ms",
     "备注",
     "证据截图",
+    "相对路径",
 ]
 ERROR_ROW_FILL = PatternFill(fill_type="solid", fgColor="FFC7CE")
-COLUMN_WIDTHS = {"A": 52, "B": 18, "C": 14, "D": 14, "E": 28, "F": 14, "G": 42, "H": 36}
+COLUMN_WIDTHS = {"A": 52, "B": 18, "C": 14, "D": 14, "E": 28, "F": 14, "G": 42, "H": 36, "I": 36}
 COMPARISON_HEADERS = ["已匹配箱号", "缺失箱号", "多余识别箱号", "格式无效"]
 
 
@@ -46,6 +47,7 @@ def write_results(
                 result.elapsed_ms,
                 result.review_note or "",
                 _display_evidence_path(result, output_dir),
+                result.relative_name or "",
             ]
         )
         if result.status is not RecognitionStatus.SUCCESS:

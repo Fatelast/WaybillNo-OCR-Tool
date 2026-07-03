@@ -39,8 +39,8 @@ def _iter_cropped_regions(image_path: Path, config: AppConfig, region_builder) -
                     region_path = temp_dir / f"{region_name}.png"
                     image.crop(box).save(region_path)
                     yield OcrRegion(image_path=region_path, region_name=region_name)
-    except Exception:
-        return
+    except Exception as exc:
+        yield OcrRegion(image_path=image_path, region_name=f"区域裁剪失败: {exc}")
 
 
 def _priority_regions(width: int, height: int) -> list[tuple[str, tuple[int, int, int, int]]]:

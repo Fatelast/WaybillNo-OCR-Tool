@@ -35,6 +35,7 @@ def test_write_results_creates_workbook_with_recognition_rows(tmp_path: Path):
         "处理耗时ms",
         "备注",
         "证据截图",
+        "相对路径",
     ]
     assert [cell.value for cell in sheet[2]] == [
         "HNKU6331795.jpg",
@@ -43,6 +44,7 @@ def test_write_results_creates_workbook_with_recognition_rows(tmp_path: Path):
         "OCR",
         None,
         123,
+        None,
         None,
         None,
     ]
@@ -192,3 +194,27 @@ def test_write_results_outputs_evidence_path_column(tmp_path: Path):
     assert sheet["H1"].value == "\u8bc1\u636e\u622a\u56fe"
     assert sheet["H2"].value == "\u8bc6\u522b\u8bc1\u636e/waybill.png"
     assert sheet.column_dimensions["H"].width >= 36
+
+
+
+def test_write_results_outputs_relative_name_column(tmp_path: Path):
+    source = tmp_path / "nested" / "waybill.pdf"
+    result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        relative_name="nested/waybill.pdf",
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="HNKU6331795",
+        elapsed_ms=1,
+    )
+
+    workbook_path = write_results([result], tmp_path)
+
+    sheet = load_workbook(workbook_path).active
+    assert sheet["I1"].value == "\u76f8\u5bf9\u8def\u5f84"
+    assert sheet["I2"].value == "nested/waybill.pdf"
+    assert sheet["A1"].value == "\u539f\u59cb\u6587\u4ef6\u540d"
+    assert sheet["A2"].value == "waybill.pdf"

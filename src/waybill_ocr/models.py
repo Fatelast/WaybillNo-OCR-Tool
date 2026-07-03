@@ -33,5 +33,6 @@ class RecognitionResult:
     failure_reason: str | None
     ocr_text: str
     elapsed_ms: int
+    relative_name: str | None = None
     review_note: str | None = None
     evidence_path: Path | None = None

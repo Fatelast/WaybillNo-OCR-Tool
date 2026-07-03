@@ -372,3 +372,36 @@ def test_process_file_fast_mode_records_guess_repair_as_review_note_only(tmp_pat
     assert result.status == RecognitionStatus.UNRECOGNIZED
     assert result.container_code is None
     assert result.review_note == "\u7591\u4f3c\u5019\u9009: HNKU633I795\uff1b\u53ef\u80fd\u4fee\u6b63: HNKU6331795\uff08\u672a\u81ea\u52a8\u91c7\u7528\uff09"
+
+
+
+def test_process_file_carries_relative_name(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "nested" / "waybill.jpg"
+    source_path.parent.mkdir()
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name="nested/waybill.jpg", suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+
+    result = process_file(task, AppConfig(), FakeOcrEngine("HNKU6331795"))
+
+    assert result.relative_name == "nested/waybill.jpg"
+
+
+def test_process_file_notes_region_crop_failure_when_unrecognized(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    def raise_crop_error(*_args):
+        raise RuntimeError("crop failed")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", raise_crop_error)
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+
+    result = process_file(task, AppConfig(), FakeOcrEngine("no code"))
+
+    assert result.status == RecognitionStatus.UNRECOGNIZED
+    assert result.review_note is not None
+    assert "\u533a\u57df\u88c1\u526a\u5931\u8d25" in result.review_note

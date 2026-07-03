@@ -523,3 +523,102 @@ def test_process_directory_saves_evidence_image_for_non_success_result(tmp_path:
     assert results[0].evidence_path == evidence_path
     workbook = load_workbook(output_dir / "\u8bc6\u522b\u7ed3\u679c.xlsx")
     assert workbook.active["H2"].value == "\u8bc6\u522b\u8bc1\u636e/bad.png"
+
+
+
+def test_process_directory_skips_existing_results_by_relative_name_for_duplicate_names(tmp_path: Path, monkeypatch):
+    from waybill_ocr.output.excel_writer import write_results
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    first_dir = input_dir / "first"
+    second_dir = input_dir / "second"
+    first_dir.mkdir(parents=True)
+    second_dir.mkdir(parents=True)
+    first_path = first_dir / "waybill.pdf"
+    second_path = second_dir / "waybill.pdf"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    processed = []
+    existing_result = RecognitionResult(
+        source_path=first_path,
+        original_name=first_path.name,
+        relative_name="first/waybill.pdf",
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="",
+        elapsed_ms=1,
+    )
+    write_results([existing_result], output_dir)
+
+    def fake_process_file(task: FileTask, _config: AppConfig, _ocr_engine: FakeOcrEngine, cancel_event=None):
+        processed.append(task.relative_name)
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            relative_name=task.relative_name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="GESU5903360",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="GESU5903360",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    assert processed == ["second\\waybill.pdf"] or processed == ["second/waybill.pdf"]
+    assert [result.relative_name for result in results] == ["first/waybill.pdf", processed[0]]
+    assert [result.container_code for result in results] == ["HNKU6331795", "GESU5903360"]
+
+
+def test_load_existing_results_falls_back_to_original_name_for_old_workbook(tmp_path: Path, monkeypatch):
+    from waybill_ocr.output.excel_writer import write_results
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "legacy.jpg"
+    source_path.write_bytes(b"legacy")
+    legacy_result = RecognitionResult(
+        source_path=source_path,
+        original_name=source_path.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="",
+        elapsed_ms=1,
+    )
+    write_results([legacy_result], output_dir)
+    workbook_path = output_dir / "\u8bc6\u522b\u7ed3\u679c.xlsx"
+    workbook = load_workbook(workbook_path)
+    sheet = workbook.active
+    sheet.delete_cols(2)
+    workbook.save(workbook_path)
+    processed = []
+
+    def fake_process_file(task: FileTask, _config: AppConfig, _ocr_engine: FakeOcrEngine, cancel_event=None):
+        processed.append(task.relative_name)
+        return legacy_result
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    assert processed == []
+    assert [result.original_name for result in results] == ["legacy.jpg"]

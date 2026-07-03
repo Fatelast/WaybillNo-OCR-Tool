@@ -17,7 +17,7 @@ def scan_input_files(input_dir: Path) -> list[FileTask]:
         tasks.append(
             FileTask(
                 source_path=path,
-                relative_name=str(path.relative_to(input_dir)),
+                relative_name=path.relative_to(input_dir).as_posix(),
                 suffix=suffix,
             )
         )

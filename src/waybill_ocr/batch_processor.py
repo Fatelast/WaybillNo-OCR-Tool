@@ -43,7 +43,7 @@ def process_directory(
     try:
         for index, task in enumerate(tasks, start=1):
             raise_if_cancelled(cancel_event)
-            existing_result = existing_results.get(task.source_path.name)
+            existing_result = existing_results.get(task.relative_name) or existing_results.get(task.source_path.name)
             if existing_result is not None:
                 results.append(existing_result)
                 _emit(on_progress, f"\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: {task.relative_name}")
@@ -55,6 +55,8 @@ def process_directory(
 
             try:
                 result = process_file(task, config, ocr_engine, cancel_event=cancel_event)
+                if result.relative_name is None:
+                    result = replace(result, relative_name=task.relative_name)
                 raise_if_cancelled(cancel_event)
                 copy_result_file(result, output_dir)
             except ProcessingCancelled:
@@ -94,6 +96,7 @@ def _failed_result(task: FileTask, reason: str, started_at: float) -> Recognitio
         failure_reason=reason,
         ocr_text="",
         elapsed_ms=elapsed_ms,
+        relative_name=task.relative_name,
     )
 
 
@@ -205,7 +208,8 @@ def _load_existing_results(
     if not workbook_path.exists():
         return {}
 
-    tasks_by_name = {task.source_path.name: task for task in tasks}
+    tasks_by_relative = {task.relative_name: task for task in tasks}
+    tasks_by_unique_name = _tasks_by_unique_name(tasks)
     workbook = None
     try:
         workbook = load_workbook(workbook_path, read_only=True, data_only=True)
@@ -214,35 +218,57 @@ def _load_existing_results(
         headers = {name: index for index, name in enumerate(next(rows, [])) if name}
         results: dict[str, RecognitionResult] = {}
         for row in rows:
-            original_name = _row_value(row, headers, "\u539f\u59cb\u6587\u4ef6\u540d")
-            if not original_name or original_name not in tasks_by_name:
+            original_name = _optional_string(_row_value(row, headers, "原始文件名"))
+            relative_name = _optional_string(_row_value(row, headers, "相对路径"))
+            task = _task_for_existing_row(relative_name, original_name, tasks_by_relative, tasks_by_unique_name)
+            if task is None or not original_name:
                 continue
 
-            task = tasks_by_name[original_name]
-            status = _recognition_status(_row_value(row, headers, "\u8bc6\u522b\u72b6\u6001"))
+            status = _recognition_status(_row_value(row, headers, "识别状态"))
             if status is None:
                 continue
 
-            results[original_name] = RecognitionResult(
+            result_relative_name = relative_name or task.relative_name
+            results[result_relative_name] = RecognitionResult(
                 source_path=task.source_path,
                 original_name=original_name,
                 status=status,
-                container_code=_optional_string(_row_value(row, headers, "\u8bc6\u522b\u7bb1\u53f7")),
-                source=_recognition_source(_row_value(row, headers, "\u8bc6\u522b\u6765\u6e90")),
-                failure_reason=_optional_string(_row_value(row, headers, "\u5931\u8d25\u539f\u56e0")),
+                container_code=_optional_string(_row_value(row, headers, "识别箱号")),
+                source=_recognition_source(_row_value(row, headers, "识别来源")),
+                failure_reason=_optional_string(_row_value(row, headers, "失败原因")),
                 ocr_text="",
-                elapsed_ms=_optional_int(_row_value(row, headers, "\u5904\u7406\u8017\u65f6ms")),
-                review_note=_optional_string(_row_value(row, headers, "\u5907\u6ce8")),
-                evidence_path=_resolve_evidence_path(output_dir, _row_value(row, headers, "\u8bc1\u636e\u622a\u56fe")),
+                elapsed_ms=_optional_int(_row_value(row, headers, "处理耗时ms")),
+                relative_name=result_relative_name,
+                review_note=_optional_string(_row_value(row, headers, "备注")),
+                evidence_path=_resolve_evidence_path(output_dir, _row_value(row, headers, "证据截图")),
             )
         return results
     except Exception as exc:
-        _emit(on_progress, f"\u5386\u53f2\u7ed3\u679c\u8bfb\u53d6\u5931\u8d25\uff0c\u5df2\u91cd\u65b0\u5904\u7406\u5168\u90e8\u6587\u4ef6: {exc}")
+        _emit(on_progress, f"历史结果读取失败，已重新处理全部文件: {exc}")
         return {}
     finally:
         if workbook is not None:
             workbook.close()
 
+
+def _tasks_by_unique_name(tasks: list[FileTask]) -> dict[str, FileTask]:
+    counts: dict[str, int] = {}
+    for task in tasks:
+        counts[task.source_path.name] = counts.get(task.source_path.name, 0) + 1
+    return {task.source_path.name: task for task in tasks if counts[task.source_path.name] == 1}
+
+
+def _task_for_existing_row(
+    relative_name: str | None,
+    original_name: str | None,
+    tasks_by_relative: dict[str, FileTask],
+    tasks_by_unique_name: dict[str, FileTask],
+) -> FileTask | None:
+    if relative_name and relative_name in tasks_by_relative:
+        return tasks_by_relative[relative_name]
+    if original_name:
+        return tasks_by_unique_name.get(original_name)
+    return None
 
 def _row_value(row, headers: dict[str, int], name: str):
     index = headers.get(name)
