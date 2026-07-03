@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_delivery_version_and_zip_name_are_canonical():
-    assert CURRENT_VERSION == "v1.0.2"
-    assert offline_zip_name() == "\u8fd0\u5355\u7bb1\u53f7\u8bc6\u522b\u5206\u62e3_v1.0.2_\u79bb\u7ebf\u7248.zip"
-    assert current_version_doc_name() == "\u7248\u672c\u8bf4\u660e_v1.0.2.txt"
+    assert CURRENT_VERSION == "v1.0.3"
+    assert offline_zip_name() == "\u8fd0\u5355\u7bb1\u53f7\u8bc6\u522b\u5206\u62e3_v1.0.3_\u79bb\u7ebf\u7248.zip"
+    assert current_version_doc_name() == "\u7248\u672c\u8bf4\u660e_v1.0.3.txt"
 
 
 def test_delivery_docs_are_current_and_include_startup_troubleshooting():
@@ -31,6 +31,8 @@ def test_delivery_docs_are_current_and_include_startup_troubleshooting():
     assert CURRENT_VERSION in text
     assert "\u901f\u5ea6\u6a21\u5f0f" in text
     assert "\u7591\u4f3c\u5019\u9009" in text
+    assert "\u8bc1\u636e\u622a\u56fe" in text
+    assert "\u5feb\u901f\u6a21\u5f0f" in text
 
     troubleshooting = delivery_dir / "\u542f\u52a8\u5931\u8d25\u6392\u67e5.txt"
     troubleshooting_text = troubleshooting.read_text(encoding="utf-8")
