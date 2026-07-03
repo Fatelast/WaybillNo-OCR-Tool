@@ -142,7 +142,7 @@ def _priority_regions_for_mode(image_path, config: AppConfig):
     except Exception as exc:
         return [OcrRegion(image_path=image_path, region_name=f"{REGION_CROP_FAILURE_MARKER}: {exc}")]
     if config.ocr_speed_mode == OCR_SPEED_FAST:
-        return islice(regions, 2)
+        return islice(regions, 3)
     return regions
 
 

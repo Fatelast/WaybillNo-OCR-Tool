@@ -476,14 +476,14 @@ def test_process_directory_skips_files_already_recorded_in_workbook(tmp_path: Pa
 
     assert processed == ["second.jpg"]
     assert [result.original_name for result in results] == ["first.jpg", "second.jpg"]
-    workbook = load_workbook(output_dir / "\u8bc6\u522b\u7ed3\u679c.xlsx")
+    workbook = load_workbook(output_dir / "识别结果.xlsx")
     assert [workbook.active["A2"].value, workbook.active["B2"].value] == ["first.jpg", "HNKU6331795"]
     assert [workbook.active["A3"].value, workbook.active["B3"].value] == ["second.jpg", "GESU5903360"]
     assert any("\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: first.jpg" == message for message in progress_messages)
     assert any("first.jpg" in message and "HNKU6331795" in message for message in progress_messages)
 
 
-def test_process_directory_saves_evidence_image_for_non_success_result(tmp_path: Path, monkeypatch):
+def test_process_directory_does_not_save_evidence_image_for_non_success_result(tmp_path: Path, monkeypatch):
     from PIL import Image
 
     input_dir = tmp_path / "input"
@@ -518,12 +518,12 @@ def test_process_directory_saves_evidence_image_for_non_success_result(tmp_path:
         ocr_engine=FakeOcrEngine(),
     )
 
-    evidence_path = output_dir / "\u8bc6\u522b\u8bc1\u636e" / "bad.png"
-    assert evidence_path.exists()
-    assert results[0].evidence_path == evidence_path
-    workbook = load_workbook(output_dir / "\u8bc6\u522b\u7ed3\u679c.xlsx")
-    assert workbook.active["H2"].value == "\u8bc6\u522b\u8bc1\u636e/bad.png"
-
+    evidence_dir = output_dir / "识别证据"
+    assert not evidence_dir.exists()
+    assert results[0].evidence_path is None
+    workbook = load_workbook(output_dir / "识别结果.xlsx")
+    headers = [cell.value for cell in workbook.active[1]]
+    assert "证据截图" not in headers
 
 
 def test_process_directory_skips_existing_results_by_relative_name_for_duplicate_names(tmp_path: Path, monkeypatch):
@@ -600,7 +600,7 @@ def test_load_existing_results_falls_back_to_original_name_for_old_workbook(tmp_
         elapsed_ms=1,
     )
     write_results([legacy_result], output_dir)
-    workbook_path = output_dir / "\u8bc6\u522b\u7ed3\u679c.xlsx"
+    workbook_path = output_dir / "识别结果.xlsx"
     workbook = load_workbook(workbook_path)
     sheet = workbook.active
     sheet.delete_cols(2)

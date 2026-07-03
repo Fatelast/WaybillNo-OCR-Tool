@@ -34,7 +34,6 @@ def test_write_results_creates_workbook_with_recognition_rows(tmp_path: Path):
         "失败原因",
         "处理耗时ms",
         "备注",
-        "证据截图",
         "相对路径",
     ]
     assert [cell.value for cell in sheet[2]] == [
@@ -44,7 +43,6 @@ def test_write_results_creates_workbook_with_recognition_rows(tmp_path: Path):
         "OCR",
         None,
         123,
-        None,
         None,
         None,
     ]
@@ -173,9 +171,9 @@ def test_write_results_adds_comparison_sheet(tmp_path: Path):
     assert [cell.value for cell in sheet[2]] == ["HNKU6331795", "GESU5903360", "MSKU1234565", "BAD-CODE"]
 
 
-def test_write_results_outputs_evidence_path_column(tmp_path: Path):
+def test_write_results_omits_evidence_path_column(tmp_path: Path):
     source = tmp_path / "waybill.jpg"
-    evidence = tmp_path / "\u8bc6\u522b\u8bc1\u636e" / "waybill.png"
+    evidence = tmp_path / "识别证据" / "waybill.png"
     result = RecognitionResult(
         source_path=source,
         original_name=source.name,
@@ -186,15 +184,16 @@ def test_write_results_outputs_evidence_path_column(tmp_path: Path):
         ocr_text="",
         elapsed_ms=1,
         evidence_path=evidence,
+        relative_name="nested/waybill.jpg",
     )
 
     workbook_path = write_results([result], tmp_path)
 
     sheet = load_workbook(workbook_path).active
-    assert sheet["H1"].value == "\u8bc1\u636e\u622a\u56fe"
-    assert sheet["H2"].value == "\u8bc6\u522b\u8bc1\u636e/waybill.png"
-    assert sheet.column_dimensions["H"].width >= 36
-
+    headers = [cell.value for cell in sheet[1]]
+    assert "证据截图" not in headers
+    assert sheet["H1"].value == "相对路径"
+    assert sheet["H2"].value == "nested/waybill.jpg"
 
 
 def test_write_results_outputs_relative_name_column(tmp_path: Path):
@@ -214,7 +213,7 @@ def test_write_results_outputs_relative_name_column(tmp_path: Path):
     workbook_path = write_results([result], tmp_path)
 
     sheet = load_workbook(workbook_path).active
-    assert sheet["I1"].value == "\u76f8\u5bf9\u8def\u5f84"
-    assert sheet["I2"].value == "nested/waybill.pdf"
-    assert sheet["A1"].value == "\u539f\u59cb\u6587\u4ef6\u540d"
+    assert sheet["H1"].value == "相对路径"
+    assert sheet["H2"].value == "nested/waybill.pdf"
+    assert sheet["A1"].value == "原始文件名"
     assert sheet["A2"].value == "waybill.pdf"

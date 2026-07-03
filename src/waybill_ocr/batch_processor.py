@@ -12,7 +12,6 @@ from waybill_ocr.config import AppConfig
 from waybill_ocr.constants import RESULT_WORKBOOK_NAME
 from waybill_ocr.container_code.expected_codes import compare_expected_codes
 from waybill_ocr.file_scanner import scan_input_files
-from waybill_ocr.image_loader import iter_images_for_ocr
 from waybill_ocr.models import FileTask, RecognitionResult, RecognitionSource, RecognitionStatus
 from waybill_ocr.ocr.base import OcrEngine
 from waybill_ocr.output.classifier import copy_result_file
@@ -20,9 +19,6 @@ from waybill_ocr.output.excel_writer import write_results
 from waybill_ocr.pipeline import process_file
 
 ProgressCallback = Callable[[str], None]
-EVIDENCE_DIR_NAME = "\u8bc6\u522b\u8bc1\u636e"
-
-
 def process_directory(
     input_dir: Path,
     output_dir: Path,
@@ -66,7 +62,6 @@ def process_directory(
                 _emit(on_progress, f"\u6587\u4ef6\u5904\u7406\u5931\u8d25\uff0c\u5df2\u8df3\u8fc7: {task.relative_name} ({exc})")
                 _copy_failed_result(result, output_dir, on_progress)
 
-            result = _attach_evidence_if_needed(result, task, output_dir, config, cancel_event, on_progress)
             results.append(result)
             workbook_path = _write_results(
                 results, output_dir, workbook_path, on_progress, expected_codes, expected_invalid_entries
@@ -105,64 +100,6 @@ def _copy_failed_result(result: RecognitionResult, output_dir: Path, on_progress
         copy_result_file(result, output_dir)
     except Exception as exc:
         _emit(on_progress, f"\u5931\u8d25\u6587\u4ef6\u590d\u5236\u5230\u672a\u8bc6\u522b\u76ee\u5f55\u5931\u8d25\uff0c\u5df2\u7ee7\u7eed: {result.original_name} ({exc})")
-
-
-def _attach_evidence_if_needed(
-    result: RecognitionResult,
-    task: FileTask,
-    output_dir: Path,
-    config: AppConfig,
-    cancel_event,
-    on_progress: ProgressCallback | None,
-) -> RecognitionResult:
-    if result.status is RecognitionStatus.SUCCESS or result.evidence_path is not None:
-        return result
-
-    try:
-        evidence_path = _save_evidence_image(task, output_dir, config, cancel_event)
-    except Exception as exc:
-        _emit(on_progress, f"\u8bc1\u636e\u622a\u56fe\u4fdd\u5b58\u5931\u8d25\uff0c\u5df2\u7ee7\u7eed: {task.relative_name} ({exc})")
-        return result
-
-    if evidence_path is None:
-        return result
-    return replace(result, evidence_path=evidence_path)
-
-
-def _save_evidence_image(
-    task: FileTask,
-    output_dir: Path,
-    config: AppConfig,
-    cancel_event,
-) -> Path | None:
-    raise_if_cancelled(cancel_event)
-    image_iterator = iter(iter_images_for_ocr(task.source_path, config))
-    try:
-        try:
-            image_path = next(image_iterator)
-        except StopIteration:
-            return None
-
-        raise_if_cancelled(cancel_event)
-        target_dir = output_dir / EVIDENCE_DIR_NAME
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_path = target_dir / _evidence_file_name(task)
-
-        from PIL import Image
-
-        with Image.open(image_path) as image:
-            image.convert("RGB").save(target_path)
-        return target_path
-    finally:
-        _close_iterator(image_iterator)
-
-
-def _evidence_file_name(task: FileTask) -> str:
-    relative_path = Path(task.relative_name).with_suffix("")
-    stem = "__".join(part for part in relative_path.parts if part)
-    if not stem:
-        stem = task.source_path.stem
-    return f"{stem}.png"
 
 
 def _write_results(
@@ -240,7 +177,6 @@ def _load_existing_results(
                 elapsed_ms=_optional_int(_row_value(row, headers, "处理耗时ms")),
                 relative_name=result_relative_name,
                 review_note=_optional_string(_row_value(row, headers, "备注")),
-                evidence_path=_resolve_evidence_path(output_dir, _row_value(row, headers, "证据截图")),
             )
         return results
     except Exception as exc:
@@ -308,15 +244,6 @@ def _optional_int(value) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
-
-
-def _resolve_evidence_path(output_dir: Path, value) -> Path | None:
-    if value is None or value == "":
-        return None
-    path = Path(str(value))
-    if path.is_absolute():
-        return path
-    return output_dir / path
 
 
 def _comparison_report(

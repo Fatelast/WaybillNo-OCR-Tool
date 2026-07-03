@@ -332,6 +332,52 @@ def test_process_file_prefers_region_ocr_candidate_over_filename_fallback(monkey
 
 
 
+
+
+def test_process_file_fast_mode_includes_full_middle_priority_region(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    left_middle = tmp_path / "left-middle.png"
+    left_upper = tmp_path / "left-upper.png"
+    full_middle = tmp_path / "full-middle.png"
+    grid_path = tmp_path / "grid.png"
+    for path in (left_middle, left_upper, full_middle, grid_path):
+        path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+    grid_called = False
+
+    def fake_grid(*_args):
+        nonlocal grid_called
+        grid_called = True
+        return [OcrRegion(image_path=grid_path, region_name="cell-r5-c1")]
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [
+            OcrRegion(image_path=left_middle, region_name="priority-left-middle"),
+            OcrRegion(image_path=left_upper, region_name="priority-left-upper"),
+            OcrRegion(image_path=full_middle, region_name="priority-full-middle"),
+        ],
+    )
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", fake_grid)
+
+    result = process_file(
+        task,
+        AppConfig(ocr_speed_mode="fast"),
+        FakeOcrEngine({
+            "waybill.jpg": "no code",
+            "left-middle.png": "no code",
+            "left-upper.png": "no code",
+            "full-middle.png": "MLRU7172277P45G130",
+            "grid.png": "MLRU7172277P45G130",
+        }),
+    )
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "MLRU7172277"
+    assert grid_called is False
+
 def test_process_file_fast_mode_skips_full_grid_when_priority_has_no_candidate(tmp_path: Path, monkeypatch):
     source_path = tmp_path / "waybill.jpg"
     source_path.write_bytes(b"fake")
