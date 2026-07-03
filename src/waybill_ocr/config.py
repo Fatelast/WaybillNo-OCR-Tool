@@ -5,6 +5,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+OCR_SPEED_STABLE = "stable"
+OCR_SPEED_BALANCED = "balanced"
+OCR_SPEED_FAST = "fast"
+OCR_SPEED_MODES = {OCR_SPEED_STABLE, OCR_SPEED_BALANCED, OCR_SPEED_FAST}
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -12,6 +17,7 @@ class AppConfig:
     poppler_path: Path | None = None
     ocr_retries: int = 2
     work_dir: Path | None = None
+    ocr_speed_mode: str = OCR_SPEED_BALANCED
 
 
 def default_config(
@@ -27,6 +33,7 @@ def default_config(
         poppler_path=_resolve_poppler_path(runtime_base, current_env),
         ocr_retries=_resolve_ocr_retries(current_env),
         work_dir=work_dir,
+        ocr_speed_mode=_resolve_ocr_speed_mode(current_env),
     )
 
 
@@ -77,6 +84,13 @@ def _resolve_ocr_retries(env: Mapping[str, str]) -> int:
         return 2
 
     return max(0, retries)
+
+
+def _resolve_ocr_speed_mode(env: Mapping[str, str]) -> str:
+    value = env.get("WAYBILL_OCR_SPEED_MODE", OCR_SPEED_BALANCED).strip().lower()
+    if value in OCR_SPEED_MODES:
+        return value
+    return OCR_SPEED_BALANCED
 
 def resolve_default_work_dir(env: Mapping[str, str] | None = None) -> Path:
     current_env = env if env is not None else os.environ

@@ -136,7 +136,13 @@ def test_process_directory_tasks_reads_expected_codes_per_task(tmp_path: Path, m
 
     import waybill_ocr.ui.task_runner as task_runner_module
 
-    monkeypatch.setattr(task_runner_module, "read_expected_codes", lambda path: ["HNKU6331795"])
+    from waybill_ocr.container_code.expected_codes import ExpectedCodeInspection
+
+    monkeypatch.setattr(
+        task_runner_module,
+        "inspect_expected_codes",
+        lambda path: ExpectedCodeInspection(valid_codes=["HNKU6331795"], duplicate_codes=[], invalid_entries=[]),
+    )
 
     def fake_process_directory(*args, **kwargs):
         calls.append(kwargs)
@@ -151,3 +157,75 @@ def test_process_directory_tasks_reads_expected_codes_per_task(tmp_path: Path, m
 
     assert calls[0]["expected_codes"] == ["HNKU6331795"]
 
+
+
+
+def test_process_directory_tasks_passes_invalid_expected_entries(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    expected_path = tmp_path / "expected.txt"
+    input_dir.mkdir()
+    expected_path.write_text("HNKU6331795\nBAD\n", encoding="utf-8")
+    calls = []
+
+    import waybill_ocr.ui.task_runner as task_runner_module
+    from waybill_ocr.container_code.expected_codes import ExpectedCodeInspection
+
+    monkeypatch.setattr(
+        task_runner_module,
+        "inspect_expected_codes",
+        lambda path: ExpectedCodeInspection(
+            valid_codes=["HNKU6331795"],
+            duplicate_codes=[],
+            invalid_entries=["BAD"],
+        ),
+    )
+
+    def fake_process_directory(*args, **kwargs):
+        calls.append(kwargs)
+        return []
+
+    process_directory_tasks(
+        tasks=[DirectoryTask(input_dir=input_dir, output_dir=output_dir, label="task", expected_codes_path=expected_path)],
+        base_config=AppConfig(work_dir=tmp_path / "work"),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+    )
+
+    assert calls[0]["expected_codes"] == ["HNKU6331795"]
+    assert calls[0]["expected_invalid_entries"] == ["BAD"]
+
+
+
+def test_process_directory_tasks_stable_worker_limit_runs_one_group_at_a_time(tmp_path: Path):
+    input_one = tmp_path / "input-one"
+    input_two = tmp_path / "input-two"
+    output_one = tmp_path / "output-one"
+    output_two = tmp_path / "output-two"
+    input_one.mkdir()
+    input_two.mkdir()
+    running = 0
+    max_running = 0
+    lock = threading.Lock()
+
+    def fake_process_directory(input_dir, output_dir, config, ocr_engine, on_progress, cancel_event=None):
+        nonlocal running, max_running
+        with lock:
+            running += 1
+            max_running = max(max_running, running)
+        with lock:
+            running -= 1
+        return []
+
+    process_directory_tasks(
+        tasks=[
+            DirectoryTask(input_dir=input_one, output_dir=output_one, label="task 1/2"),
+            DirectoryTask(input_dir=input_two, output_dir=output_two, label="task 2/2"),
+        ],
+        base_config=AppConfig(work_dir=tmp_path / "work"),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+        max_workers=1,
+    )
+
+    assert max_running == 1

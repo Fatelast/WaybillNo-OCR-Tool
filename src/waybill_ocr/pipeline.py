@@ -1,13 +1,15 @@
 import time
+from itertools import islice
 
 from waybill_ocr.cancellation import ProcessingCancelled, raise_if_cancelled
-from waybill_ocr.config import AppConfig
+from waybill_ocr.config import AppConfig, OCR_SPEED_FAST
 from waybill_ocr.container_code.candidate_selector import (
     CandidateText,
     select_best_candidate_with_score,
 )
 from waybill_ocr.container_code.extractor import (
     extract_candidates,
+    extract_guess_repair_suggestions,
     extract_invalid_candidates,
     extract_suspicious_candidates,
 )
@@ -39,7 +41,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                 return _build_success_result(task, full_selection, combined_text, started)
             combined_text = _recognize_regions(
                 ocr_engine=ocr_engine,
-                regions=iter_priority_ocr_regions(image_path, config),
+                regions=_priority_regions_for_mode(image_path, config),
                 candidate_texts=candidate_texts,
                 combined_text=combined_text,
                 cancel_event=cancel_event,
@@ -48,16 +50,17 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             if selection:
                 return _build_success_result(task, selection, combined_text, started)
 
-            combined_text = _recognize_regions(
-                ocr_engine=ocr_engine,
-                regions=iter_grid_ocr_regions(image_path, config),
-                candidate_texts=candidate_texts,
-                combined_text=combined_text,
-                cancel_event=cancel_event,
-            )
-            selection = select_best_candidate_with_score(candidate_texts)
-            if selection:
-                return _build_success_result(task, selection, combined_text, started)
+            if _should_run_grid(config):
+                combined_text = _recognize_regions(
+                    ocr_engine=ocr_engine,
+                    regions=iter_grid_ocr_regions(image_path, config),
+                    candidate_texts=candidate_texts,
+                    combined_text=combined_text,
+                    cancel_event=cancel_event,
+                )
+                selection = select_best_candidate_with_score(candidate_texts)
+                if selection:
+                    return _build_success_result(task, selection, combined_text, started)
 
             invalid_candidates = extract_invalid_candidates(combined_text)
             if invalid_candidates:
@@ -130,6 +133,17 @@ def _filename_fallback_result(task: FileTask, ocr_text: str, started: float) -> 
     return None
 
 
+def _priority_regions_for_mode(image_path, config: AppConfig):
+    regions = iter_priority_ocr_regions(image_path, config)
+    if config.ocr_speed_mode == OCR_SPEED_FAST:
+        return islice(regions, 2)
+    return regions
+
+
+def _should_run_grid(config: AppConfig) -> bool:
+    return config.ocr_speed_mode != OCR_SPEED_FAST
+
+
 def _recognize_regions(
     ocr_engine: OcrEngine,
     regions,
@@ -186,9 +200,19 @@ def _selection_review_note(selection) -> str | None:
 
 def _suspicious_note(ocr_text: str) -> str | None:
     candidates = extract_suspicious_candidates(ocr_text)
-    if not candidates:
+    suggestions = extract_guess_repair_suggestions(ocr_text)
+    if not candidates and not suggestions:
         return None
-    return f"\u7591\u4f3c\u5019\u9009: {', '.join(candidates)}"
+
+    parts = []
+    if candidates:
+        parts.append(f"\u7591\u4f3c\u5019\u9009: {', '.join(candidates)}")
+    if suggestions:
+        suggestion_text = ", ".join(f"{raw}->{repaired}" for raw, repaired in suggestions)
+        if len(suggestions) == 1:
+            suggestion_text = suggestions[0][1]
+        parts.append(f"\u53ef\u80fd\u4fee\u6b63: {suggestion_text}\uff08\u672a\u81ea\u52a8\u91c7\u7528\uff09")
+    return "\uff1b".join(parts)
 
 
 def _build_result(

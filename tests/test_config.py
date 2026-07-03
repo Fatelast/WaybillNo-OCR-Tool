@@ -61,3 +61,16 @@ def test_default_config_defaults_to_zero_ocr_retries(tmp_path: Path):
     config = default_config(base_dir=tmp_path, env={})
 
     assert config.ocr_retries == 0
+
+
+
+def test_default_config_reads_valid_ocr_speed_mode(tmp_path: Path):
+    config = default_config(base_dir=tmp_path, env={"WAYBILL_OCR_SPEED_MODE": "fast"})
+
+    assert config.ocr_speed_mode == "fast"
+
+
+def test_default_config_ignores_invalid_ocr_speed_mode(tmp_path: Path):
+    config = default_config(base_dir=tmp_path, env={"WAYBILL_OCR_SPEED_MODE": "unknown"})
+
+    assert config.ocr_speed_mode == "balanced"

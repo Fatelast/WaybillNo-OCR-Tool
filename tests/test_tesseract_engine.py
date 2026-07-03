@@ -108,3 +108,46 @@ def test_tesseract_engine_terminates_process_when_cancelled(tmp_path: Path):
         engine.recognize_image(image_path, cancel_event=cancel_event)
 
     assert process.terminated is True
+
+
+
+def test_tesseract_engine_stable_mode_retries_empty_result_once(tmp_path: Path):
+    image_path = tmp_path / "waybill.png"
+    image_path.write_bytes(b"fake")
+    calls = []
+
+    def fake_process_factory(_command, **_kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return FakeProcess(stdout="", stderr="empty", returncode=0)
+        return FakeProcess(stdout="HNKU6331795", returncode=0)
+
+    engine = TesseractEngine(
+        AppConfig(tesseract_cmd=Path("tesseract.exe"), ocr_retries=0, ocr_speed_mode="stable"),
+        process_factory=fake_process_factory,
+    )
+
+    result = engine.recognize_image(image_path)
+
+    assert result.text == "HNKU6331795"
+    assert len(calls) == 2
+
+
+def test_tesseract_engine_fast_mode_does_not_retry_empty_result(tmp_path: Path):
+    image_path = tmp_path / "waybill.png"
+    image_path.write_bytes(b"fake")
+    calls = []
+
+    def fake_process_factory(_command, **_kwargs):
+        calls.append(1)
+        return FakeProcess(stdout="", stderr="empty", returncode=0)
+
+    engine = TesseractEngine(
+        AppConfig(tesseract_cmd=Path("tesseract.exe"), ocr_retries=3, ocr_speed_mode="fast"),
+        process_factory=fake_process_factory,
+    )
+
+    with pytest.raises(RuntimeError, match="Tesseract OCR \u5931\u8d25"):
+        engine.recognize_image(image_path)
+
+    assert len(calls) == 1

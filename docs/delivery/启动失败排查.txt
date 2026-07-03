@@ -1,0 +1,16 @@
+运单箱号识别工具 启动失败排查
+
+1. 双击无反应或闪退
+- 不要单独移动 exe，需要保持完整交付目录。
+- 不要在压缩包内直接运行 exe。
+
+2. Tesseract
+- 确认 tools/tesseract/tesseract.exe 和 tools/tesseract/tessdata/eng.traineddata 存在。
+- 如日志提示 TESSDATA_PREFIX，请使用完整交付包目录重新运行。
+
+3. Poppler
+- 确认 tools/poppler/Library/bin/pdftoppm.exe 存在。
+- PDF 转图失败时，先检查 PDF 是否损坏、加密或被占用。
+
+4. 结果表无法写入
+- 如 识别结果.xlsx 被 Excel/WPS 打开，程序会写入备用结果表。

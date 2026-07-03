@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from waybill_ocr.container_code.expected_codes import compare_expected_codes, read_expected_codes
+from waybill_ocr.container_code.expected_codes import compare_expected_codes, inspect_expected_codes, read_expected_codes
 from waybill_ocr.models import RecognitionResult, RecognitionSource, RecognitionStatus
 
 
@@ -33,3 +33,21 @@ def test_compare_expected_codes_reports_matched_missing_and_extra():
     assert report.matched_codes == ["HNKU6331795"]
     assert report.missing_codes == ["GESU5903360"]
     assert report.extra_codes == ["MSKU1234565"]
+
+
+
+def test_inspect_expected_codes_reports_valid_duplicates_and_invalid_entries(tmp_path: Path):
+    list_path = tmp_path / "expected.txt"
+    list_path.write_text(
+        "HNKU6331795\ninvalid-line\nHNKU6331795\nHNKU6331794\nGESU5903360 45G1\n",
+        encoding="utf-8",
+    )
+
+    inspection = inspect_expected_codes(list_path)
+
+    assert inspection.valid_codes == ["HNKU6331795", "GESU5903360"]
+    assert inspection.duplicate_codes == ["HNKU6331795"]
+    assert inspection.invalid_entries == ["invalid-line", "HNKU6331794"]
+    assert inspection.valid_count == 2
+    assert inspection.duplicate_count == 1
+    assert inspection.invalid_count == 2

@@ -304,7 +304,7 @@ def test_process_file_records_guess_like_candidate_without_final_replacement(tmp
     assert result.container_code is None
     assert result.source is None
     assert result.failure_reason == "NO_CONTAINER_CANDIDATE"
-    assert result.review_note == "\u7591\u4f3c\u5019\u9009: HNKU633I795"
+    assert result.review_note == "\u7591\u4f3c\u5019\u9009: HNKU633I795\uff1b\u53ef\u80fd\u4fee\u6b63: HNKU6331795\uff08\u672a\u81ea\u52a8\u91c7\u7528\uff09"
 
 
 def test_process_file_prefers_region_ocr_candidate_over_filename_fallback(monkeypatch):
@@ -329,3 +329,46 @@ def test_process_file_prefers_region_ocr_candidate_over_filename_fallback(monkey
     assert result.container_code == "GESU5903360"
     assert result.source == RecognitionSource.OCR
 
+
+
+
+def test_process_file_fast_mode_skips_full_grid_when_priority_has_no_candidate(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    priority_path = tmp_path / "priority.png"
+    priority_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+    grid_called = False
+
+    def fake_grid(*_args):
+        nonlocal grid_called
+        grid_called = True
+        return []
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=priority_path, region_name="priority-left-middle")],
+    )
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", fake_grid)
+
+    result = process_file(task, AppConfig(ocr_speed_mode="fast"), FakeOcrEngine("no code"))
+
+    assert result.status == RecognitionStatus.UNRECOGNIZED
+    assert grid_called is False
+
+
+def test_process_file_fast_mode_records_guess_repair_as_review_note_only(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+
+    result = process_file(task, AppConfig(ocr_speed_mode="fast"), FakeOcrEngine("OCR HNKU633I795"))
+
+    assert result.status == RecognitionStatus.UNRECOGNIZED
+    assert result.container_code is None
+    assert result.review_note == "\u7591\u4f3c\u5019\u9009: HNKU633I795\uff1b\u53ef\u80fd\u4fee\u6b63: HNKU6331795\uff08\u672a\u81ea\u52a8\u91c7\u7528\uff09"

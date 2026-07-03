@@ -8,6 +8,25 @@ REPAIRABLE_EXTRA_OWNER_LETTER_PATTERN = re.compile(r"[A-Z]{4}U\s*\d{7}")
 SUSPICIOUS_CANDIDATE_PATTERN = re.compile(r"[A-Z0-9]{3}U\s*[A-Z0-9]{7}")
 
 
+GUESS_REPLACEMENTS = {
+    "O": "0",
+    "I": "1",
+    "L": "1",
+    "B": "8",
+    "S": "5",
+    "Z": "2",
+}
+
+
+def extract_guess_repair_suggestions(text: str) -> list[tuple[str, str]]:
+    suggestions: list[tuple[str, str]] = []
+    for candidate in _iter_suspicious_candidates(text):
+        repaired = _guess_repair_candidate(candidate)
+        if repaired and (candidate, repaired) not in suggestions:
+            suggestions.append((candidate, repaired))
+    return suggestions
+
+
 def extract_candidates(text: str) -> list[str]:
     candidates: list[str] = []
     for candidate in _iter_normalized_candidates(text):
@@ -79,3 +98,24 @@ def _needs_guess_replacement(candidate: str) -> bool:
     if category != "U":
         return False
     return not owner.isalpha() or not serial.isdigit()
+
+
+
+def _guess_repair_candidate(candidate: str) -> str | None:
+    if len(candidate) != 11 or candidate[3] != "U":
+        return None
+    owner = candidate[:3]
+    serial = candidate[4:]
+    if not owner.isalpha():
+        return None
+    repaired_serial = "".join(_guess_digit(char) for char in serial)
+    if not repaired_serial.isdigit() or repaired_serial == serial:
+        return None
+    repaired = f"{owner}U{repaired_serial}"
+    return repaired if is_valid_container_code(repaired) else None
+
+
+def _guess_digit(char: str) -> str:
+    if char.isdigit():
+        return char
+    return GUESS_REPLACEMENTS.get(char, char)

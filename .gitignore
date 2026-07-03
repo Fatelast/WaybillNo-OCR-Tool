@@ -6,6 +6,7 @@ venv/
 dist/
 dist_offline_*/
 build/
+build_*/
 *.spec.bak
 log/
 logs/
@@ -13,6 +14,8 @@ logs/
 识别结果.xlsx
 samples/input/*
 !samples/input/.gitkeep
+!samples/input/*/
+!samples/input/*/.gitkeep
 samples/actual/*
 !samples/actual/.gitkeep
 pytest-cache-files-*/

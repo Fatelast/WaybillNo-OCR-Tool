@@ -16,11 +16,11 @@ HEADERS = [
     "失败原因",
     "处理耗时ms",
     "备注",
+    "证据截图",
 ]
 ERROR_ROW_FILL = PatternFill(fill_type="solid", fgColor="FFC7CE")
-COLUMN_WIDTHS = {"A": 52, "B": 18, "C": 14, "D": 14, "E": 28, "F": 14, "G": 42}
-COMPARISON_HEADERS = ['已匹配箱号', '缺失箱号', '多余识别箱号']
-
+COLUMN_WIDTHS = {"A": 52, "B": 18, "C": 14, "D": 14, "E": 28, "F": 14, "G": 42, "H": 36}
+COMPARISON_HEADERS = ["已匹配箱号", "缺失箱号", "多余识别箱号", "格式无效"]
 
 
 def write_results(
@@ -45,6 +45,7 @@ def write_results(
                 result.failure_reason or "",
                 result.elapsed_ms,
                 result.review_note or "",
+                _display_evidence_path(result, output_dir),
             ]
         )
         if result.status is not RecognitionStatus.SUCCESS:
@@ -57,6 +58,17 @@ def write_results(
     target_path = workbook_path or output_dir / RESULT_WORKBOOK_NAME
     workbook.save(target_path)
     return target_path
+
+
+def _display_evidence_path(result: RecognitionResult, output_dir: Path) -> str:
+    if result.evidence_path is None:
+        return ""
+
+    evidence_path = Path(result.evidence_path)
+    try:
+        return evidence_path.relative_to(output_dir).as_posix()
+    except ValueError:
+        return str(evidence_path)
 
 
 def _highlight_row(cells) -> None:
@@ -75,13 +87,20 @@ def _append_comparison_sheet(workbook, report: ComparisonReport) -> None:
     sheet.column_dimensions["A"].width = 18
     sheet.column_dimensions["B"].width = 18
     sheet.column_dimensions["C"].width = 18
-    row_count = max(len(report.matched_codes), len(report.missing_codes), len(report.extra_codes))
+    sheet.column_dimensions["D"].width = 28
+    row_count = max(
+        len(report.matched_codes),
+        len(report.missing_codes),
+        len(report.extra_codes),
+        len(report.invalid_expected_entries),
+    )
     for index in range(row_count):
         sheet.append(
             [
                 _item_at(report.matched_codes, index),
                 _item_at(report.missing_codes, index),
                 _item_at(report.extra_codes, index),
+                _item_at(report.invalid_expected_entries, index),
             ]
         )
 

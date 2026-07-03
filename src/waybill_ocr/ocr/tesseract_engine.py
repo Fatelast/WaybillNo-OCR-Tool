@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from waybill_ocr.cancellation import ProcessingCancelled, is_cancelled
-from waybill_ocr.config import AppConfig
+from waybill_ocr.config import AppConfig, OCR_SPEED_FAST, OCR_SPEED_STABLE
 from waybill_ocr.ocr.base import OcrResult
 
 
@@ -33,7 +33,7 @@ class TesseractEngine:
         text = ""
         last_error = ""
 
-        for _ in range(self.config.ocr_retries + 1):
+        for _ in range(self._effective_retries() + 1):
             process = self._process_factory(
                 self._build_command(image_path),
                 stdout=subprocess.PIPE,
@@ -54,6 +54,14 @@ class TesseractEngine:
             raise RuntimeError(f"Tesseract OCR 失败: {detail}")
 
         return OcrResult(text=text, engine_name="tesseract", elapsed_ms=elapsed_ms)
+
+
+    def _effective_retries(self) -> int:
+        if self.config.ocr_speed_mode == OCR_SPEED_FAST:
+            return 0
+        if self.config.ocr_speed_mode == OCR_SPEED_STABLE:
+            return max(self.config.ocr_retries, 1)
+        return self.config.ocr_retries
 
     def _wait_for_process(self, process, cancel_event) -> tuple[str, str, int | None]:
         deadline = time.perf_counter() + OCR_TIMEOUT_SECONDS

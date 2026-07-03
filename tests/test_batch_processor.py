@@ -414,8 +414,112 @@ def test_process_directory_logs_expected_code_comparison(tmp_path: Path, monkeyp
         expected_codes=["HNKU6331795", "GESU5903360"],
     )
 
-    assert "箱号比对: 已匹配 1, 缺失 1, 多余 0" in progress_messages
+    assert "箱号比对: 已匹配 1, 缺失 1, 多余 0, 格式无效 0" in progress_messages
     assert "缺失箱号: GESU5903360" in progress_messages
     workbook = load_workbook(output_dir / "识别结果.xlsx")
     assert "箱号比对" in workbook.sheetnames
 
+
+
+
+def test_process_directory_skips_files_already_recorded_in_workbook(tmp_path: Path, monkeypatch):
+    from waybill_ocr.output.excel_writer import write_results
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    first_path = input_dir / "first.jpg"
+    second_path = input_dir / "second.jpg"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    progress_messages = []
+    processed = []
+    existing_result = RecognitionResult(
+        source_path=first_path,
+        original_name=first_path.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="",
+        elapsed_ms=1,
+    )
+    write_results([existing_result], output_dir)
+
+    def fake_process_file(
+        task: FileTask,
+        _config: AppConfig,
+        _ocr_engine: FakeOcrEngine,
+        cancel_event=None,
+    ) -> RecognitionResult:
+        processed.append(task.relative_name)
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="GESU5903360",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="GESU5903360",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        on_progress=progress_messages.append,
+    )
+
+    assert processed == ["second.jpg"]
+    assert [result.original_name for result in results] == ["first.jpg", "second.jpg"]
+    workbook = load_workbook(output_dir / "\u8bc6\u522b\u7ed3\u679c.xlsx")
+    assert [workbook.active["A2"].value, workbook.active["B2"].value] == ["first.jpg", "HNKU6331795"]
+    assert [workbook.active["A3"].value, workbook.active["B3"].value] == ["second.jpg", "GESU5903360"]
+    assert any("\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: first.jpg" == message for message in progress_messages)
+    assert any("first.jpg" in message and "HNKU6331795" in message for message in progress_messages)
+
+
+def test_process_directory_saves_evidence_image_for_non_success_result(tmp_path: Path, monkeypatch):
+    from PIL import Image
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "bad.jpg"
+    Image.new("RGB", (32, 24), "white").save(source_path)
+
+    def fake_process_file(
+        task: FileTask,
+        _config: AppConfig,
+        _ocr_engine: FakeOcrEngine,
+        cancel_event=None,
+    ) -> RecognitionResult:
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.INVALID,
+            container_code="HNKU6331794",
+            source=RecognitionSource.OCR,
+            failure_reason="INVALID_CHECK_DIGIT",
+            ocr_text="HNKU6331794",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    evidence_path = output_dir / "\u8bc6\u522b\u8bc1\u636e" / "bad.png"
+    assert evidence_path.exists()
+    assert results[0].evidence_path == evidence_path
+    workbook = load_workbook(output_dir / "\u8bc6\u522b\u7ed3\u679c.xlsx")
+    assert workbook.active["H2"].value == "\u8bc6\u522b\u8bc1\u636e/bad.png"

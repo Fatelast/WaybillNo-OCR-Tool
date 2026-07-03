@@ -33,7 +33,8 @@ def test_write_results_creates_workbook_with_recognition_rows(tmp_path: Path):
         "识别来源",
         "失败原因",
         "处理耗时ms",
-    "备注",
+        "备注",
+        "证据截图",
     ]
     assert [cell.value for cell in sheet[2]] == [
         "HNKU6331795.jpg",
@@ -42,6 +43,7 @@ def test_write_results_creates_workbook_with_recognition_rows(tmp_path: Path):
         "OCR",
         None,
         123,
+        None,
         None,
     ]
 
@@ -153,12 +155,40 @@ def test_write_results_adds_comparison_sheet(tmp_path: Path):
         matched_codes=["HNKU6331795"],
         missing_codes=["GESU5903360"],
         extra_codes=["MSKU1234565"],
+        invalid_expected_entries=["BAD-CODE"],
     )
 
     workbook_path = write_results([result], tmp_path, comparison_report=report)
 
     workbook = load_workbook(workbook_path)
-    sheet = workbook["箱号比对"]
-    assert [cell.value for cell in sheet[1]] == ["已匹配箱号", "缺失箱号", "多余识别箱号"]
-    assert [cell.value for cell in sheet[2]] == ["HNKU6331795", "GESU5903360", "MSKU1234565"]
+    sheet = workbook["\u7bb1\u53f7\u6bd4\u5bf9"]
+    assert [cell.value for cell in sheet[1]] == [
+        "\u5df2\u5339\u914d\u7bb1\u53f7",
+        "\u7f3a\u5931\u7bb1\u53f7",
+        "\u591a\u4f59\u8bc6\u522b\u7bb1\u53f7",
+        "\u683c\u5f0f\u65e0\u6548",
+    ]
+    assert [cell.value for cell in sheet[2]] == ["HNKU6331795", "GESU5903360", "MSKU1234565", "BAD-CODE"]
 
+
+def test_write_results_outputs_evidence_path_column(tmp_path: Path):
+    source = tmp_path / "waybill.jpg"
+    evidence = tmp_path / "\u8bc6\u522b\u8bc1\u636e" / "waybill.png"
+    result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        status=RecognitionStatus.UNRECOGNIZED,
+        container_code=None,
+        source=None,
+        failure_reason="NO_CONTAINER_CANDIDATE",
+        ocr_text="",
+        elapsed_ms=1,
+        evidence_path=evidence,
+    )
+
+    workbook_path = write_results([result], tmp_path)
+
+    sheet = load_workbook(workbook_path).active
+    assert sheet["H1"].value == "\u8bc1\u636e\u622a\u56fe"
+    assert sheet["H2"].value == "\u8bc6\u522b\u8bc1\u636e/waybill.png"
+    assert sheet.column_dimensions["H"].width >= 36

@@ -34,3 +34,4 @@ class RecognitionResult:
     ocr_text: str
     elapsed_ms: int
     review_note: str | None = None
+    evidence_path: Path | None = None
