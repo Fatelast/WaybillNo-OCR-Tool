@@ -151,3 +151,22 @@ def test_tesseract_engine_fast_mode_does_not_retry_empty_result(tmp_path: Path):
         engine.recognize_image(image_path)
 
     assert len(calls) == 1
+
+
+def test_tesseract_engine_accepts_psm_override(tmp_path: Path):
+    calls = []
+    image_path = tmp_path / "waybill.png"
+    image_path.write_bytes(b"fake")
+
+    def fake_process_factory(command, **kwargs):
+        calls.append(command)
+        return FakeProcess(stdout="HNKU6331795")
+
+    engine = TesseractEngine(AppConfig(tesseract_cmd=Path("tesseract.exe")), process_factory=fake_process_factory)
+
+    result = engine.recognize_image(image_path, psm=11)
+
+    assert result.text == "HNKU6331795"
+    assert "--psm" in calls[0]
+    assert calls[0][calls[0].index("--psm") + 1] == "11"
+

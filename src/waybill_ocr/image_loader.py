@@ -35,11 +35,11 @@ def iter_images_for_ocr(file_path: Path, config: AppConfig) -> Iterator[Path]:
             page_number += 1
 
 
-def _convert_pdf_page(file_path: Path, config: AppConfig, page_number: int):
+def _convert_pdf_page(file_path: Path, config: AppConfig, page_number: int, dpi: int = 300):
     converter = _load_pdf_converter()
     return converter(
         pdf_path=str(file_path),
-        dpi=300,
+        dpi=dpi,
         poppler_path=str(config.poppler_path) if config.poppler_path else None,
         first_page=page_number,
         last_page=page_number,

@@ -5,6 +5,7 @@ from waybill_ocr.cancellation import ProcessingCancelled, raise_if_cancelled
 from waybill_ocr.config import AppConfig, OCR_SPEED_FAST
 from waybill_ocr.container_code.candidate_selector import (
     CandidateText,
+    CandidateSelection,
     select_best_candidate_with_score,
 )
 from waybill_ocr.container_code.extractor import (
@@ -14,15 +15,18 @@ from waybill_ocr.container_code.extractor import (
     extract_suspicious_candidates,
 )
 from waybill_ocr.image_loader import iter_images_for_ocr
-from waybill_ocr.image_regions import OcrRegion, iter_grid_ocr_regions, iter_priority_ocr_regions
+from waybill_ocr.image_regions import OcrRegion, iter_enhanced_ocr_regions, iter_grid_ocr_regions, iter_priority_ocr_regions
 from waybill_ocr.models import FileTask, RecognitionResult, RecognitionSource, RecognitionStatus
 from waybill_ocr.ocr.base import OcrEngine
 
 
 STRONG_CANDIDATE_SCORE = 140
-REGION_CROP_FAILURE_MARKER = "区域裁剪失败"
-REGION_CROP_SKIP_MARKER = "区域裁剪跳过"
-REGION_CROP_FAILURE_NOTE = "区域裁剪失败/跳过，可能图片损坏或无法读取区域"
+CONFLICTING_CANDIDATES_REASON = "CONFLICTING_CANDIDATES"
+REGION_CROP_FAILURE_MARKER = "\u533a\u57df\u88c1\u526a\u5931\u8d25"
+REGION_CROP_SKIP_MARKER = "\u533a\u57df\u88c1\u526a\u8df3\u8fc7"
+REGION_CROP_FAILURE_NOTE = "\u533a\u57df\u88c1\u526a\u5931\u8d25/\u8df3\u8fc7\uff0c\u53ef\u80fd\u56fe\u7247\u635f\u574f\u6216\u65e0\u6cd5\u8bfb\u53d6\u533a\u57df"
+REGION_OCR_FAILURE_MARKER = "\u533a\u57df OCR \u5931\u8d25"
+ENHANCED_PSM_MODES = (6, 11)
 
 
 def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cancel_event=None) -> RecognitionResult:
@@ -41,7 +45,20 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             combined_text = _recognize_region(ocr_engine, full_region, candidate_texts, combined_text, cancel_event)
             full_selection = select_best_candidate_with_score(candidate_texts)
             if full_selection and full_selection.score >= STRONG_CANDIDATE_SCORE:
-                return _build_success_result(task, full_selection, combined_text, started)
+                result, combined_text = _resolve_valid_selection(
+                    task=task,
+                    config=config,
+                    ocr_engine=ocr_engine,
+                    image_path=image_path,
+                    selection=full_selection,
+                    candidate_texts=candidate_texts,
+                    combined_text=combined_text,
+                    started=started,
+                    cancel_event=cancel_event,
+                )
+                if result:
+                    return result
+
             combined_text = _recognize_regions(
                 ocr_engine=ocr_engine,
                 regions=_priority_regions_for_mode(image_path, config),
@@ -51,7 +68,19 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             )
             selection = select_best_candidate_with_score(candidate_texts)
             if selection:
-                return _build_success_result(task, selection, combined_text, started)
+                result, combined_text = _resolve_valid_selection(
+                    task=task,
+                    config=config,
+                    ocr_engine=ocr_engine,
+                    image_path=image_path,
+                    selection=selection,
+                    candidate_texts=candidate_texts,
+                    combined_text=combined_text,
+                    started=started,
+                    cancel_event=cancel_event,
+                )
+                if result:
+                    return result
 
             if _should_run_grid(config):
                 combined_text = _recognize_regions(
@@ -63,10 +92,38 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                 )
                 selection = select_best_candidate_with_score(candidate_texts)
                 if selection:
-                    return _build_success_result(task, selection, combined_text, started)
+                    result, combined_text = _resolve_valid_selection(
+                        task=task,
+                        config=config,
+                        ocr_engine=ocr_engine,
+                        image_path=image_path,
+                        selection=selection,
+                        candidate_texts=candidate_texts,
+                        combined_text=combined_text,
+                        started=started,
+                        cancel_event=cancel_event,
+                    )
+                    if result:
+                        return result
 
             invalid_candidates = extract_invalid_candidates(combined_text)
             if invalid_candidates:
+                enhanced_selection, combined_text = _recognize_enhanced_selection(
+                    task=task,
+                    config=config,
+                    ocr_engine=ocr_engine,
+                    image_path=image_path,
+                    combined_text=combined_text,
+                    cancel_event=cancel_event,
+                )
+                if enhanced_selection:
+                    return _build_enhanced_success_result(
+                        task=task,
+                        selection=enhanced_selection,
+                        ocr_text=combined_text,
+                        started=started,
+                        review_note=f"\u589e\u5f3a\u8bc6\u522b\u4fee\u590d\u65e0\u6548\u5019\u9009: {invalid_candidates[0]} -> {enhanced_selection.code}",
+                    )
                 return _build_result(
                     task=task,
                     status=RecognitionStatus.INVALID,
@@ -75,7 +132,26 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                     failure_reason="INVALID_CHECK_DIGIT",
                     ocr_text=combined_text,
                     started=started,
+                    review_note=_final_review_note(combined_text),
                 )
+
+            if _should_run_enhancement(config):
+                enhanced_selection, combined_text = _recognize_enhanced_selection(
+                    task=task,
+                    config=config,
+                    ocr_engine=ocr_engine,
+                    image_path=image_path,
+                    combined_text=combined_text,
+                    cancel_event=cancel_event,
+                )
+                if enhanced_selection:
+                    return _build_enhanced_success_result(
+                        task=task,
+                        selection=enhanced_selection,
+                        ocr_text=combined_text,
+                        started=started,
+                        review_note=f"\u589e\u5f3a\u8bc6\u522b\u5019\u9009: {enhanced_selection.code}",
+                    )
 
         filename_result = _filename_fallback_result(task, combined_text, started)
         if filename_result:
@@ -136,6 +212,99 @@ def _filename_fallback_result(task: FileTask, ocr_text: str, started: float) -> 
     return None
 
 
+def _resolve_valid_selection(
+    task: FileTask,
+    config: AppConfig,
+    ocr_engine: OcrEngine,
+    image_path,
+    selection: CandidateSelection,
+    candidate_texts: list[CandidateText],
+    combined_text: str,
+    started: float,
+    cancel_event,
+) -> tuple[RecognitionResult | None, str]:
+    if not _has_candidate_conflict(selection.code, combined_text):
+        return _build_success_result(task, selection, combined_text, started), combined_text
+
+    if _should_run_enhancement(config):
+        enhanced_selection, combined_text = _recognize_enhanced_selection(
+            task=task,
+            config=config,
+            ocr_engine=ocr_engine,
+            image_path=image_path,
+            combined_text=combined_text,
+            cancel_event=cancel_event,
+        )
+        if enhanced_selection:
+            if enhanced_selection.code == selection.code:
+                return _build_success_result(task, selection, combined_text, started), combined_text
+            return _build_enhanced_success_result(
+                task=task,
+                selection=enhanced_selection,
+                ocr_text=combined_text,
+                started=started,
+                review_note=f"\u589e\u5f3a\u8bc6\u522b\u8986\u76d6\u4f4e\u6e05\u6670\u5ea6\u5019\u9009: {selection.code} -> {enhanced_selection.code}",
+            ), combined_text
+
+    return _build_conflict_result(task, selection.code, combined_text, started), combined_text
+
+
+def _has_candidate_conflict(code: str, ocr_text: str) -> bool:
+    valid_candidates = [candidate for candidate in extract_candidates(ocr_text) if candidate != code]
+    if valid_candidates:
+        return True
+
+    prefix = code[:4]
+    return any(candidate[:4] == prefix and candidate != code for candidate in extract_suspicious_candidates(ocr_text))
+
+
+def _build_conflict_result(task: FileTask, code: str, ocr_text: str, started: float) -> RecognitionResult:
+    suspicious = extract_suspicious_candidates(ocr_text)
+    parts = [f"\u5019\u9009\u51b2\u7a81\uff0c\u9700\u4eba\u5de5\u590d\u6838: {code}"]
+    if suspicious:
+        parts.append(f"\u7591\u4f3c\u5019\u9009: {', '.join(suspicious)}")
+    return _build_result(
+        task=task,
+        status=RecognitionStatus.INVALID,
+        container_code=code,
+        source=RecognitionSource.OCR,
+        failure_reason=CONFLICTING_CANDIDATES_REASON,
+        ocr_text=ocr_text,
+        started=started,
+        review_note="\uff1b".join(parts),
+    )
+
+
+def _recognize_enhanced_selection(
+    task: FileTask,
+    config: AppConfig,
+    ocr_engine: OcrEngine,
+    image_path,
+    combined_text: str,
+    cancel_event,
+) -> tuple[CandidateSelection | None, str]:
+    if not _should_run_enhancement(config):
+        return None, combined_text
+
+    enhanced_texts: list[CandidateText] = []
+    region_iterator = iter(iter_enhanced_ocr_regions(task, image_path, config))
+    try:
+        for region in region_iterator:
+            for psm in ENHANCED_PSM_MODES:
+                raise_if_cancelled(cancel_event)
+                combined_text = _recognize_region(
+                    ocr_engine=ocr_engine,
+                    region=region,
+                    candidate_texts=enhanced_texts,
+                    combined_text=combined_text,
+                    cancel_event=cancel_event,
+                    psm=psm,
+                )
+        return select_best_candidate_with_score(enhanced_texts), combined_text
+    finally:
+        _close_iterator(region_iterator)
+
+
 def _priority_regions_for_mode(image_path, config: AppConfig):
     try:
         regions = iter_priority_ocr_regions(image_path, config)
@@ -147,6 +316,10 @@ def _priority_regions_for_mode(image_path, config: AppConfig):
 
 
 def _should_run_grid(config: AppConfig) -> bool:
+    return config.ocr_speed_mode != OCR_SPEED_FAST
+
+
+def _should_run_enhancement(config: AppConfig) -> bool:
     return config.ocr_speed_mode != OCR_SPEED_FAST
 
 
@@ -173,14 +346,24 @@ def _recognize_region(
     candidate_texts: list[CandidateText],
     combined_text: str,
     cancel_event,
+    psm: int | None = None,
 ) -> str:
     if _is_region_diagnostic(region.region_name):
         candidate_texts.append(CandidateText(text="", region_name=region.region_name))
         return f"{combined_text}\n[{region.region_name}]"
 
-    ocr_result = ocr_engine.recognize_image(region.image_path, cancel_event=cancel_event)
+    try:
+        ocr_result = ocr_engine.recognize_image(region.image_path, cancel_event=cancel_event, psm=psm)
+    except ProcessingCancelled:
+        raise
+    except Exception as exc:
+        marker = f"{REGION_OCR_FAILURE_MARKER}: {region.region_name}: {exc}"
+        candidate_texts.append(CandidateText(text="", region_name=region.region_name))
+        return f"{combined_text}\n[{region.region_name}]\n{marker}"
+
     candidate_texts.append(CandidateText(text=ocr_result.text, region_name=region.region_name))
-    return f"{combined_text}\n[{region.region_name}]\n{ocr_result.text}"
+    label = region.region_name if psm is None else f"{region.region_name}:psm{psm}"
+    return f"{combined_text}\n[{label}]\n{ocr_result.text}"
 
 
 def _is_region_diagnostic(region_name: str) -> bool:
@@ -197,6 +380,25 @@ def _build_success_result(task: FileTask, selection, ocr_text: str, started: flo
         ocr_text=ocr_text,
         started=started,
         review_note=_selection_review_note(selection),
+    )
+
+
+def _build_enhanced_success_result(
+    task: FileTask,
+    selection,
+    ocr_text: str,
+    started: float,
+    review_note: str | None,
+) -> RecognitionResult:
+    return _build_result(
+        task=task,
+        status=RecognitionStatus.SUCCESS,
+        container_code=selection.code,
+        source=RecognitionSource.OCR_ENHANCED,
+        failure_reason=None,
+        ocr_text=ocr_text,
+        started=started,
+        review_note=review_note,
     )
 
 
@@ -218,7 +420,11 @@ def _final_review_note(ocr_text: str) -> str | None:
         return suspicious_note
     if REGION_CROP_FAILURE_MARKER in ocr_text or REGION_CROP_SKIP_MARKER in ocr_text:
         return REGION_CROP_FAILURE_NOTE
+    if REGION_OCR_FAILURE_MARKER in ocr_text:
+        return "\u90e8\u5206\u533a\u57df OCR \u5931\u8d25\uff0c\u5df2\u8df3\u8fc7\u5931\u8d25\u533a\u57df\u5e76\u7ee7\u7eed\u8bc6\u522b"
     return None
+
+
 def _suspicious_note(ocr_text: str) -> str | None:
     candidates = extract_suspicious_candidates(ocr_text)
     suggestions = extract_guess_repair_suggestions(ocr_text)

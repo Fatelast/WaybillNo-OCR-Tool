@@ -116,6 +116,27 @@ def test_write_results_outputs_review_note_and_repaired_source(tmp_path: Path):
     assert sheet["G2"].value == "OCR\u4fee\u6b63\u539f\u59cb\u7247\u6bb5: HINKU6331795"
 
 
+def test_write_results_outputs_enhanced_source_and_review_note(tmp_path: Path):
+    source = tmp_path / "waybill.jpg"
+    result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="TEMU6779790",
+        source=RecognitionSource.OCR_ENHANCED,
+        failure_reason=None,
+        ocr_text="TEMU6779790",
+        elapsed_ms=123,
+        review_note="\u589e\u5f3a\u8bc6\u522b\u8986\u76d6\u4f4e\u6e05\u6670\u5ea6\u5019\u9009: TEMU7797904 -> TEMU6779790",
+    )
+
+    workbook_path = write_results([result], tmp_path)
+
+    sheet = load_workbook(workbook_path).active
+    assert sheet["D2"].value == "OCR\u589e\u5f3a"
+    assert sheet["G2"].value == "\u589e\u5f3a\u8bc6\u522b\u8986\u76d6\u4f4e\u6e05\u6670\u5ea6\u5019\u9009: TEMU7797904 -> TEMU6779790"
+
+
 def test_write_results_sets_original_name_column_width(tmp_path: Path):
     source = tmp_path / "long-original-file-name.pdf"
     result = RecognitionResult(

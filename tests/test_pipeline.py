@@ -11,7 +11,7 @@ class FakeOcrEngine:
     def __init__(self, text_or_texts: str | dict[str, str]) -> None:
         self.text_or_texts = text_or_texts
 
-    def recognize_image(self, image_path: Path, cancel_event=None) -> OcrResult:
+    def recognize_image(self, image_path: Path, cancel_event=None, *, psm: int | None = None) -> OcrResult:
         if isinstance(self.text_or_texts, dict):
             text = self.text_or_texts.get(image_path.name, "")
         else:
@@ -163,7 +163,7 @@ def test_process_file_stops_between_regions_when_cancelled(tmp_path: Path, monke
         def __init__(self) -> None:
             self.seen = []
 
-        def recognize_image(self, image_path: Path, cancel_event=None) -> OcrResult:
+        def recognize_image(self, image_path: Path, cancel_event=None, *, psm: int | None = None) -> OcrResult:
             self.seen.append(image_path.name)
             if image_path.name == "priority.png":
                 cancel_event.set()
@@ -451,3 +451,132 @@ def test_process_file_notes_region_crop_failure_when_unrecognized(tmp_path: Path
     assert result.status == RecognitionStatus.UNRECOGNIZED
     assert result.review_note is not None
     assert "\u533a\u57df\u88c1\u526a\u5931\u8d25" in result.review_note
+
+
+def test_process_file_uses_enhanced_candidate_when_base_valid_candidate_conflicts_with_suspicious_text(
+    tmp_path: Path, monkeypatch
+):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    priority_path = tmp_path / "priority-left-middle.png"
+    priority_path.write_bytes(b"fake")
+    enhanced_path = tmp_path / "enhanced-full-middle.png"
+    enhanced_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=priority_path, region_name="priority-left-middle")],
+    )
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_enhanced_ocr_regions",
+        lambda task, image_path, config: [OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle")],
+        raising=False,
+    )
+
+    result = process_file(
+        task,
+        AppConfig(ocr_speed_mode="balanced"),
+        FakeOcrEngine(
+            {
+                "waybill.jpg": "noise TEMUGTT9790 45G1",
+                "priority-left-middle.png": "TEMU77979045G132500",
+                "enhanced-full-middle.png": "TEMU677979045G132500",
+            }
+        ),
+    )
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "TEMU6779790"
+    assert result.source == RecognitionSource.OCR_ENHANCED
+    assert result.review_note == "\u589e\u5f3a\u8bc6\u522b\u8986\u76d6\u4f4e\u6e05\u6670\u5ea6\u5019\u9009: TEMU7797904 -> TEMU6779790"
+
+
+def test_process_file_fast_mode_marks_conflicting_candidate_for_review_without_enhancement(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    priority_path = tmp_path / "priority-left-middle.png"
+    priority_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=priority_path, region_name="priority-left-middle")],
+    )
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+
+    result = process_file(
+        task,
+        AppConfig(ocr_speed_mode="fast"),
+        FakeOcrEngine({"waybill.jpg": "noise TEMUGTT9790", "priority-left-middle.png": "TEMU77979045G132500"}),
+    )
+
+    assert result.status == RecognitionStatus.INVALID
+    assert result.container_code == "TEMU7797904"
+    assert result.failure_reason == "CONFLICTING_CANDIDATES"
+    assert result.review_note == "\u5019\u9009\u51b2\u7a81\uff0c\u9700\u4eba\u5de5\u590d\u6838: TEMU7797904\uff1b\u7591\u4f3c\u5019\u9009: TEMUGTT9790"
+
+
+def test_process_file_uses_enhanced_candidate_when_base_candidate_has_invalid_check_digit(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    enhanced_path = tmp_path / "enhanced-full-middle.png"
+    enhanced_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_enhanced_ocr_regions",
+        lambda task, image_path, config: [OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle")],
+        raising=False,
+    )
+
+    result = process_file(
+        task,
+        AppConfig(ocr_speed_mode="balanced"),
+        FakeOcrEngine({"waybill.jpg": "MEDU18591845G132500", "enhanced-full-middle.png": "MEDU418591845G132500"}),
+    )
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "MEDU4185918"
+    assert result.source == RecognitionSource.OCR_ENHANCED
+    assert result.review_note == "\u589e\u5f3a\u8bc6\u522b\u4fee\u590d\u65e0\u6548\u5019\u9009: MEDU1859184 -> MEDU4185918"
+
+
+def test_process_file_continues_after_single_region_ocr_failure(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    priority_path = tmp_path / "priority-left-middle.png"
+    priority_path.write_bytes(b"fake")
+    grid_path = tmp_path / "cell-r5-c1.png"
+    grid_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    class FailingRegionOcrEngine:
+        def recognize_image(self, image_path: Path, cancel_event=None, *, psm: int | None = None) -> OcrResult:
+            if image_path.name == "priority-left-middle.png":
+                raise RuntimeError("empty OCR text")
+            text = "GESU5903360P45G130" if image_path.name == "cell-r5-c1.png" else "no code"
+            return OcrResult(text=text, engine_name="fake", elapsed_ms=1)
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_priority_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=priority_path, region_name="priority-left-middle")],
+    )
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_grid_ocr_regions",
+        lambda image_path, config: [OcrRegion(image_path=grid_path, region_name="cell-r5-c1")],
+    )
+
+    result = process_file(task, AppConfig(), FailingRegionOcrEngine())
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "GESU5903360"
+    assert "\u533a\u57df OCR \u5931\u8d25" in result.ocr_text
+

@@ -11,5 +11,5 @@ class OcrResult:
 
 
 class OcrEngine(Protocol):
-    def recognize_image(self, image_path: Path, cancel_event=None) -> OcrResult:
+    def recognize_image(self, image_path: Path, cancel_event=None, *, psm: int | None = None) -> OcrResult:
         """识别单张图片并返回 OCR 文本。"""

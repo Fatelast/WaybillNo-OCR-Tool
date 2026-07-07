@@ -12,6 +12,7 @@ class RecognitionStatus(str, Enum):
 class RecognitionSource(str, Enum):
     OCR = "OCR"
     OCR_REPAIRED = "OCR\u4fee\u6b63"
+    OCR_ENHANCED = "OCR\u589e\u5f3a"
     FILENAME = "文件名"
     MANUAL = "人工修正"
 

@@ -10,14 +10,8 @@ from waybill_ocr.config import AppConfig, OCR_SPEED_FAST, OCR_SPEED_STABLE
 from waybill_ocr.ocr.base import OcrResult
 
 
-TESSERACT_ARGS = [
-    "-l",
-    "eng",
-    "--psm",
-    "6",
-    "-c",
-    "tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-]
+DEFAULT_PSM = 6
+
 OCR_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 0.05
 ProcessFactory = Callable[..., Any]
@@ -28,14 +22,14 @@ class TesseractEngine:
         self.config = config
         self._process_factory = process_factory or subprocess.Popen
 
-    def recognize_image(self, image_path: Path, cancel_event=None) -> OcrResult:
+    def recognize_image(self, image_path: Path, cancel_event=None, *, psm: int | None = None) -> OcrResult:
         started = time.perf_counter()
         text = ""
         last_error = ""
 
         for _ in range(self._effective_retries() + 1):
             process = self._process_factory(
-                self._build_command(image_path),
+                self._build_command(image_path, psm=psm),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -77,9 +71,19 @@ class TesseractEngine:
         stdout, stderr = process.communicate()
         return stdout or "", stderr or "", process.returncode
 
-    def _build_command(self, image_path: Path) -> list[str]:
+    def _build_command(self, image_path: Path, psm: int | None = None) -> list[str]:
         executable = self.config.tesseract_cmd or Path("tesseract")
-        return [str(executable), str(image_path), "stdout", *self._tessdata_args(), *TESSERACT_ARGS]
+        return [str(executable), str(image_path), "stdout", *self._tessdata_args(), *self._tesseract_args(psm)]
+
+    def _tesseract_args(self, psm: int | None) -> list[str]:
+        return [
+            "-l",
+            "eng",
+            "--psm",
+            str(psm or DEFAULT_PSM),
+            "-c",
+            "tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        ]
 
     def _subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()
