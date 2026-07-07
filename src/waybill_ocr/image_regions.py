@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from waybill_ocr.config import AppConfig
+from waybill_ocr.config import AppConfig, OCR_SPEED_BALANCED, OCR_SPEED_STABLE
 from waybill_ocr.image_loader import _convert_pdf_page, temporary_directory
 
 
@@ -46,7 +46,7 @@ def _iter_enhanced_regions(task, image_path: Path, config: AppConfig) -> Iterato
             for source_name, source_path in sources:
                 with Image.open(source_path) as image:
                     width, height = image.size
-                    for region_name, box in _enhanced_regions(width, height):
+                    for region_name, box in _enhanced_regions(width, height, config.ocr_speed_mode):
                         crop = image.crop(box)
                         plain = ImageOps.autocontrast(crop.convert("L"))
                         plain_path = temp_dir / f"enhanced-{source_name}-{region_name}-plain.png"
@@ -65,11 +65,21 @@ def _iter_enhanced_regions(task, image_path: Path, config: AppConfig) -> Iterato
         yield OcrRegion(image_path=image_path, region_name=f"\u533a\u57df\u88c1\u526a\u5931\u8d25: {exc}")
 
 
-def _enhanced_regions(width: int, height: int) -> list[tuple[str, tuple[int, int, int, int]]]:
-    return [
+def _enhanced_regions(
+    width: int,
+    height: int,
+    mode: str = OCR_SPEED_BALANCED,
+) -> list[tuple[str, tuple[int, int, int, int]]]:
+    base_regions = [
         ("full-middle", _box(width, height, 0.00, 0.36, 1.00, 0.68)),
         ("left-middle", _box(width, height, 0.00, 0.42, 0.58, 0.66)),
         ("left-lower-middle", _box(width, height, 0.00, 0.54, 0.64, 0.82)),
+    ]
+    if mode != OCR_SPEED_STABLE:
+        return base_regions
+    return base_regions + [
+        ("full-upper-middle", _box(width, height, 0.00, 0.22, 1.00, 0.54)),
+        ("left-wide-middle", _box(width, height, 0.00, 0.32, 0.72, 0.74)),
     ]
 
 

@@ -143,11 +143,19 @@ def test_speed_mode_description_updates_for_fast_mode():
 
     main_window.MainWindow._update_speed_description(window)
 
-    assert "\u6f0f\u8bc6\u522b\u98ce\u9669" in window.speed_description_var.get()
-    assert "\u6587\u4ef6\u6e05\u6670" in window.speed_description_var.get()
+    assert "清晰文件" in window.speed_description_var.get()
+    assert "待确认" in window.speed_description_var.get()
 
 
 def test_speed_mode_description_defaults_to_balanced():
     from waybill_ocr.ui import main_window
 
-    assert "\u65e5\u5e38\u6279\u91cf\u5904\u7406" in main_window._speed_mode_description(main_window.OCR_SPEED_BALANCED)
+    assert "默认推荐" in main_window._speed_mode_description(main_window.OCR_SPEED_BALANCED)
+
+def test_speed_mode_descriptions_are_user_scenario_based():
+    from waybill_ocr.ui import main_window
+
+    assert "清晰文件" in main_window.SPEED_MODE_DESCRIPTIONS[main_window.OCR_SPEED_FAST]
+    assert "默认推荐" in main_window.SPEED_MODE_DESCRIPTIONS[main_window.OCR_SPEED_BALANCED]
+    assert "模糊" in main_window.SPEED_MODE_DESCRIPTIONS[main_window.OCR_SPEED_STABLE]
+    assert "PSM" not in main_window.SPEED_MODE_DESCRIPTIONS[main_window.OCR_SPEED_STABLE]

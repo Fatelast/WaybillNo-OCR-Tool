@@ -29,3 +29,16 @@ def test_tools_directory_documents_required_binaries():
     assert "tools/tesseract/tesseract.exe" in tools_readme
     assert "tools/poppler" in tools_readme
     assert "pdftoppm.exe" in tools_readme
+
+def test_cleanup_script_documents_safe_generated_targets():
+    cleanup_script = ROOT / "scripts" / "cleanup_workspace.ps1"
+
+    assert cleanup_script.exists()
+    script_text = cleanup_script.read_text(encoding="utf-8")
+    assert "[switch]$Apply" in script_text
+    assert "[switch]$IncludeDist" in script_text
+    assert ".tmp" in script_text
+    assert "pytest-cache-files-*" in script_text
+    assert "build" in script_text
+    assert "__pycache__" in script_text
+    assert "加 -Apply 执行删除" in script_text

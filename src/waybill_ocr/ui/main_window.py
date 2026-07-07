@@ -42,9 +42,9 @@ SPEED_MODE_LABELS = {
 }
 SPEED_MODE_VALUES = {label: mode for mode, label in SPEED_MODE_LABELS.items()}
 SPEED_MODE_DESCRIPTIONS = {
-    OCR_SPEED_STABLE: "稳定模式：适合文件模糊、版式变化大的情况，优先保证识别完整。",
-    OCR_SPEED_BALANCED: "均衡模式：适合日常批量处理，速度和准确率较均衡，推荐使用。",
-    OCR_SPEED_FAST: "快速模式：适合文件清晰且版式稳定，处理最快，但有漏识别风险。",
+    OCR_SPEED_STABLE: "适合模糊文件；处理更慢，会尽量复核并提升成功识别率。",
+    OCR_SPEED_BALANCED: "默认推荐；兼顾速度和准确率，会对失败件做有限复核。",
+    OCR_SPEED_FAST: "适合清晰文件快速粗筛；失败件会保留待确认，不做深度复核。",
 }
 
 

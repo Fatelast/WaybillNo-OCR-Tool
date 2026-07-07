@@ -600,4 +600,139 @@ def test_process_file_does_not_set_review_code_for_ambiguous_single_digit_repair
     assert result.container_code == "YYCU6002610"
     assert result.failure_reason == "INVALID_CHECK_DIGIT"
     assert result.review_code is None
-    assert result.review_note is None
+    assert result.review_note is not None
+    assert "多个疑似校验修正候选" in result.review_note
+    assert "YYCU6003610" in result.review_note
+
+def test_fast_mode_keeps_review_candidate_as_unrecognized(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+
+    result = process_file(task, AppConfig(ocr_speed_mode="fast"), FakeOcrEngine("UACUSSO2014 UACUS5O2014"))
+
+    assert result.status == RecognitionStatus.UNRECOGNIZED
+    assert result.review_code == "UACU5502014"
+
+
+def test_balanced_mode_promotes_review_candidate_after_enhanced_confirmation(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    enhanced_path = tmp_path / "enhanced.png"
+    enhanced_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_enhanced_ocr_regions",
+        lambda *_args: [OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle")],
+    )
+
+    result = process_file(
+        task,
+        AppConfig(ocr_speed_mode="balanced"),
+        FakeOcrEngine({"waybill.jpg": "UACUSSO2014", "enhanced.png": "UACU5502014 45G1"}),
+    )
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "UACU5502014"
+    assert result.source == RecognitionSource.OCR_ENHANCED
+
+
+def test_fast_mode_does_not_pick_ambiguous_digit_repair(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_enhanced_ocr_regions", lambda *_args: [])
+
+    result = process_file(task, AppConfig(ocr_speed_mode="fast"), FakeOcrEngine("YYCU6002610"))
+
+    assert result.status == RecognitionStatus.INVALID
+    assert result.review_code is None
+
+
+def test_stable_mode_selects_clear_digit_repair_with_enhanced_evidence(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    enhanced_path = tmp_path / "enhanced.png"
+    enhanced_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_enhanced_ocr_regions",
+        lambda *_args: [OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle")],
+    )
+
+    result = process_file(
+        task,
+        AppConfig(ocr_speed_mode="stable"),
+        FakeOcrEngine({"waybill.jpg": "YYCU6002610", "enhanced.png": "YYCU6003610 45G1"}),
+    )
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "YYCU6003610"
+
+def test_enhanced_ocr_does_not_promote_unrelated_valid_code_for_invalid_candidate(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    enhanced_path = tmp_path / "enhanced.png"
+    enhanced_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_enhanced_ocr_regions",
+        lambda *_args: [OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle")],
+    )
+
+    result = process_file(
+        task,
+        AppConfig(ocr_speed_mode="stable"),
+        FakeOcrEngine({"waybill.jpg": "YYCU6002610", "enhanced.png": "HNKU6331795 45G1"}),
+    )
+
+    assert result.status == RecognitionStatus.INVALID
+    assert result.container_code == "YYCU6002610"
+    assert result.failure_reason == "INVALID_CHECK_DIGIT"
+
+def test_enhanced_ocr_uses_multiple_psm_in_stable_mode(tmp_path: Path, monkeypatch):
+    calls = []
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    enhanced_path = tmp_path / "enhanced.png"
+    enhanced_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    class RecordingOcrEngine:
+        def recognize_image(self, image_path, cancel_event=None, *, psm=None):
+            calls.append(psm)
+            return OcrResult(text="no code", engine_name="fake", elapsed_ms=1)
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr(
+        "waybill_ocr.pipeline.iter_enhanced_ocr_regions",
+        lambda *_args: [OcrRegion(image_path=enhanced_path, region_name="enhanced")],
+    )
+
+    process_file(task, AppConfig(ocr_speed_mode="stable"), RecordingOcrEngine())
+
+    assert 6 in calls
+    assert 7 in calls
+    assert 11 in calls

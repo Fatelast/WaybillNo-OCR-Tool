@@ -28,6 +28,13 @@ class CandidateSelection:
     raw_candidate: str | None = None
 
 
+
+@dataclass(frozen=True)
+class ReviewCandidateScore:
+    code: str
+    score: int
+    reasons: tuple[str, ...]
+
 @dataclass(frozen=True)
 class _ScoredCandidate:
     code: str
@@ -121,3 +128,43 @@ def _score_candidate(context: str, region_name: str) -> int:
     if any(keyword in context for keyword in CONTEXT_KEYWORDS):
         score += 25
     return score
+
+def score_review_candidates(
+    base_text: str,
+    enhanced_text: str,
+    candidates: list[str],
+    expected_codes: set[str] | None = None,
+) -> list[ReviewCandidateScore]:
+    expected_codes = expected_codes or set()
+    normalized_base = base_text.upper()
+    normalized_enhanced = enhanced_text.upper()
+    scored: list[ReviewCandidateScore] = []
+    for code in candidates:
+        score = 0
+        reasons: list[str] = []
+        if code in normalized_base:
+            score += 30
+            reasons.append("base_valid")
+        if code in normalized_enhanced:
+            score += 90
+            reasons.append("enhanced_valid")
+        if expected_codes and code in expected_codes:
+            score += 40
+            reasons.append("expected_match")
+        scored.append(ReviewCandidateScore(code=code, score=score, reasons=tuple(reasons)))
+    return sorted(scored, key=lambda item: item.score, reverse=True)
+
+def has_clear_review_winner(
+    scores: list[ReviewCandidateScore],
+    min_score: int,
+    min_margin: int,
+) -> str | None:
+    if not scores:
+        return None
+    ordered = sorted(scores, key=lambda item: item.score, reverse=True)
+    best = ordered[0]
+    if best.score < min_score:
+        return None
+    if len(ordered) > 1 and best.score - ordered[1].score < min_margin:
+        return None
+    return best.code

@@ -1,11 +1,17 @@
 import re
+from dataclasses import dataclass
 
 from waybill_ocr.container_code.validator import is_valid_container_code
-
 
 CANDIDATE_PATTERN = re.compile(r"[A-Z]{3}U\s*\d{7}")
 REPAIRABLE_EXTRA_OWNER_LETTER_PATTERN = re.compile(r"[A-Z]{4}U\s*\d{7}")
 SUSPICIOUS_CANDIDATE_PATTERN = re.compile(r"[A-Z0-9]{3}U\s*[A-Z0-9]{7}")
+
+@dataclass(frozen=True)
+class GuessRepairEvidence:
+    raw: str
+    repaired: str
+    repaired_valid: bool
 
 
 GUESS_REPLACEMENTS = {
@@ -17,7 +23,6 @@ GUESS_REPLACEMENTS = {
     "Z": "2",
 }
 
-
 def extract_guess_repair_suggestions(text: str) -> list[tuple[str, str]]:
     suggestions: list[tuple[str, str]] = []
     for candidate in _iter_suspicious_candidates(text):
@@ -26,6 +31,13 @@ def extract_guess_repair_suggestions(text: str) -> list[tuple[str, str]]:
             suggestions.append((candidate, repaired))
     return suggestions
 
+def extract_guess_repair_evidence(text: str) -> list[GuessRepairEvidence]:
+    evidence: list[GuessRepairEvidence] = []
+    for raw, repaired in extract_guess_repair_suggestions(text):
+        item = GuessRepairEvidence(raw=raw, repaired=repaired, repaired_valid=is_valid_container_code(repaired))
+        if item not in evidence:
+            evidence.append(item)
+    return evidence
 
 def extract_candidates(text: str) -> list[str]:
     candidates: list[str] = []
@@ -34,7 +46,6 @@ def extract_candidates(text: str) -> list[str]:
             candidates.append(candidate)
 
     return candidates
-
 
 def extract_repaired_candidates(text: str) -> list[str]:
     candidates: list[str] = []
@@ -45,7 +56,6 @@ def extract_repaired_candidates(text: str) -> list[str]:
 
     return candidates
 
-
 def extract_invalid_candidates(text: str) -> list[str]:
     candidates: list[str] = []
     for candidate in _iter_normalized_candidates(text):
@@ -53,8 +63,6 @@ def extract_invalid_candidates(text: str) -> list[str]:
             candidates.append(candidate)
 
     return candidates
-
-
 
 def extract_suspicious_candidates(text: str) -> list[str]:
     candidates: list[str] = []
@@ -64,18 +72,15 @@ def extract_suspicious_candidates(text: str) -> list[str]:
 
     return candidates
 
-
 def _iter_normalized_candidates(text: str):
     normalized = text.upper().replace("-", " ").replace("_", " ")
     for match in CANDIDATE_PATTERN.finditer(normalized):
         yield re.sub(r"\s+", "", match.group(0))
 
-
 def _iter_repairable_candidates(text: str):
     normalized = text.upper().replace("-", " ").replace("_", " ")
     for match in REPAIRABLE_EXTRA_OWNER_LETTER_PATTERN.finditer(normalized):
         yield re.sub(r"\s+", "", match.group(0))
-
 
 def repair_extra_owner_letter(candidate: str) -> str | None:
     if len(candidate) != 12 or candidate[1] != "I":
@@ -84,12 +89,10 @@ def repair_extra_owner_letter(candidate: str) -> str | None:
     repaired = f"{candidate[0]}{candidate[2:]}"
     return repaired if is_valid_container_code(repaired) else None
 
-
 def _iter_suspicious_candidates(text: str):
     normalized = text.upper().replace("-", " ").replace("_", " ")
     for match in SUSPICIOUS_CANDIDATE_PATTERN.finditer(normalized):
         yield re.sub(r"\s+", "", match.group(0))
-
 
 def _needs_guess_replacement(candidate: str) -> bool:
     owner = candidate[:3]
@@ -98,8 +101,6 @@ def _needs_guess_replacement(candidate: str) -> bool:
     if category != "U":
         return False
     return not owner.isalpha() or not serial.isdigit()
-
-
 
 def _guess_repair_candidate(candidate: str) -> str | None:
     if len(candidate) != 11 or candidate[3] != "U":
@@ -113,7 +114,6 @@ def _guess_repair_candidate(candidate: str) -> str | None:
         return None
     repaired = f"{owner}U{repaired_serial}"
     return repaired if is_valid_container_code(repaired) else None
-
 
 def _guess_digit(char: str) -> str:
     if char.isdigit():

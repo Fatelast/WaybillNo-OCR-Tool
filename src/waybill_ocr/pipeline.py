@@ -2,10 +2,12 @@ import time
 from itertools import islice
 
 from waybill_ocr.cancellation import ProcessingCancelled, raise_if_cancelled
-from waybill_ocr.config import AppConfig, OCR_SPEED_FAST
+from waybill_ocr.config import AppConfig, OCR_SPEED_BALANCED, OCR_SPEED_FAST, OCR_SPEED_STABLE
 from waybill_ocr.container_code.candidate_selector import (
     CandidateText,
     CandidateSelection,
+    has_clear_review_winner,
+    score_review_candidates,
     select_best_candidate_with_score,
 )
 from waybill_ocr.container_code.extractor import (
@@ -109,6 +111,8 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
 
             invalid_candidates = extract_invalid_candidates(combined_text)
             if invalid_candidates:
+                invalid_candidate = invalid_candidates[0]
+                base_text = combined_text
                 enhanced_selection, combined_text = _recognize_enhanced_selection(
                     task=task,
                     config=config,
@@ -117,24 +121,30 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                     combined_text=combined_text,
                     cancel_event=cancel_event,
                 )
-                if enhanced_selection:
+                if enhanced_selection and _is_confirmed_invalid_repair(
+                    invalid_candidate,
+                    enhanced_selection.code,
+                    base_text,
+                    combined_text,
+                    config,
+                ):
                     return _build_enhanced_success_result(
                         task=task,
                         selection=enhanced_selection,
                         ocr_text=combined_text,
                         started=started,
-                        review_note=f"\u589e\u5f3a\u8bc6\u522b\u4fee\u590d\u65e0\u6548\u5019\u9009: {invalid_candidates[0]} -> {enhanced_selection.code}",
+                        review_note=f"\u589e\u5f3a\u8bc6\u522b\u4fee\u590d\u65e0\u6548\u5019\u9009: {invalid_candidate} -> {enhanced_selection.code}",
                     )
                 return _build_result(
                     task=task,
                     status=RecognitionStatus.INVALID,
-                    container_code=invalid_candidates[0],
+                    container_code=invalid_candidate,
                     source=RecognitionSource.OCR,
                     failure_reason="INVALID_CHECK_DIGIT",
                     ocr_text=combined_text,
                     started=started,
-                    review_note=_invalid_review_note(invalid_candidates[0], combined_text),
-                    review_code=_review_code_for_invalid_candidate(invalid_candidates[0], combined_text),
+                    review_note=_invalid_review_note(invalid_candidate, combined_text),
+                    review_code=_review_code_for_invalid_candidate(invalid_candidate, combined_text),
                 )
 
             if _should_run_enhancement(config):
@@ -159,6 +169,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
         if filename_result:
             return filename_result
 
+        review_code = _review_code_from_text(combined_text)
         return _build_result(
             task=task,
             status=RecognitionStatus.UNRECOGNIZED,
@@ -168,7 +179,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             ocr_text=combined_text,
             started=started,
             review_note=_final_review_note(combined_text),
-            review_code=_review_code_from_text(combined_text),
+            review_code=review_code,
         )
     except ProcessingCancelled:
         raise
@@ -281,6 +292,75 @@ def _build_conflict_result(task: FileTask, code: str, ocr_text: str, started: fl
     )
 
 
+
+def _is_confirmed_invalid_repair(
+    invalid_candidate: str,
+    enhanced_code: str,
+    base_text: str,
+    enhanced_text: str,
+    config: AppConfig,
+) -> bool:
+    repairs = _single_digit_check_repairs(invalid_candidate)
+    if not _is_related_enhanced_candidate(invalid_candidate, enhanced_code, repairs):
+        return False
+    candidates = list(dict.fromkeys([*repairs, enhanced_code]))
+    winner = _confirmed_review_winner(base_text, enhanced_text, candidates, config)
+    return winner == enhanced_code
+
+
+def _is_related_enhanced_candidate(invalid_candidate: str, enhanced_code: str, repairs: list[str]) -> bool:
+    if enhanced_code in repairs:
+        return True
+    if len(invalid_candidate) != 11 or len(enhanced_code) != 11:
+        return False
+    if invalid_candidate[:4] != enhanced_code[:4]:
+        return False
+    return _longest_common_digit_run(invalid_candidate[4:], enhanced_code[4:]) >= 5
+
+
+def _longest_common_digit_run(left: str, right: str) -> int:
+    longest = 0
+    for start in range(len(left)):
+        for end in range(start + 1, len(left) + 1):
+            segment = left[start:end]
+            if segment in right:
+                longest = max(longest, len(segment))
+    return longest
+
+
+def _confirmed_review_winner(
+    base_text: str,
+    enhanced_text: str,
+    candidates: list[str],
+    config: AppConfig,
+) -> str | None:
+    if not _should_promote_review_candidate(config):
+        return None
+    min_score, min_margin = _review_promotion_thresholds(config)
+    scores = score_review_candidates(
+        base_text=base_text,
+        enhanced_text=enhanced_text,
+        candidates=candidates,
+        expected_codes=set(),
+    )
+    return has_clear_review_winner(scores, min_score=min_score, min_margin=min_margin)
+
+
+def _should_promote_review_candidate(config: AppConfig) -> bool:
+    return config.ocr_speed_mode in {OCR_SPEED_BALANCED, OCR_SPEED_STABLE}
+
+
+def _review_promotion_thresholds(config: AppConfig) -> tuple[int, int]:
+    if config.ocr_speed_mode == OCR_SPEED_STABLE:
+        return 80, 15
+    return 90, 25
+
+
+
+def _enhanced_psm_values(config: AppConfig) -> tuple[int, ...]:
+    if config.ocr_speed_mode == OCR_SPEED_STABLE:
+        return (6, 7, 11)
+    return (6, 11)
 def _recognize_enhanced_selection(
     task: FileTask,
     config: AppConfig,
@@ -296,7 +376,7 @@ def _recognize_enhanced_selection(
     region_iterator = iter(iter_enhanced_ocr_regions(task, image_path, config))
     try:
         for region in region_iterator:
-            for psm in ENHANCED_PSM_MODES:
+            for psm in _enhanced_psm_values(config):
                 raise_if_cancelled(cancel_event)
                 combined_text = _recognize_region(
                     ocr_engine=ocr_engine,
@@ -421,10 +501,9 @@ def _selection_review_note(selection) -> str | None:
 
 
 def _invalid_review_note(candidate: str, ocr_text: str) -> str | None:
-    repair = _single_digit_check_repair(candidate)
+    repair_note = _format_single_digit_repair_note(candidate)
     note = _final_review_note(ocr_text)
-    if repair:
-        repair_note = f"疑似校验修正: {candidate} -> {repair}（待人工确认）"
+    if repair_note:
         return f"{repair_note}；{note}" if note else repair_note
     return note
 
@@ -443,9 +522,27 @@ def _review_code_from_text(ocr_text: str) -> str | None:
     return None
 
 
+def _format_single_digit_repair_note(candidate: str) -> str | None:
+    repairs = _single_digit_check_repairs(candidate)
+    if len(repairs) == 1:
+        return f"疑似校验修正: {candidate} -> {repairs[0]}（待人工确认）"
+    if len(repairs) > 1:
+        displayed = ", ".join(repairs[:8])
+        suffix = "..." if len(repairs) > 8 else ""
+        return f"多个疑似校验修正候选（未自动采用）: {displayed}{suffix}"
+    return None
+
+
 def _single_digit_check_repair(candidate: str) -> str | None:
+    repairs = _single_digit_check_repairs(candidate)
+    if len(repairs) == 1:
+        return repairs[0]
+    return None
+
+
+def _single_digit_check_repairs(candidate: str) -> list[str]:
     if len(candidate) != 11 or not candidate[:3].isalpha() or candidate[3] != "U" or not candidate[4:].isdigit():
-        return None
+        return []
 
     repairs: list[str] = []
     for index in range(4, 10):
@@ -456,9 +553,8 @@ def _single_digit_check_repair(candidate: str) -> str | None:
             repaired = f"{candidate[:index]}{digit}{candidate[index + 1:]}"
             if is_valid_container_code(repaired) and repaired not in repairs:
                 repairs.append(repaired)
-    if len(repairs) == 1:
-        return repairs[0]
-    return None
+    return repairs
+
 
 def _final_review_note(ocr_text: str) -> str | None:
     suspicious_note = _suspicious_note(ocr_text)

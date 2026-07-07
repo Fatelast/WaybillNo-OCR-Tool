@@ -43,3 +43,14 @@ def test_extract_repaired_candidate_does_not_do_digit_letter_guessing():
     from waybill_ocr.container_code.extractor import extract_repaired_candidates
 
     assert extract_repaired_candidates("OCR HNKU633I795") == []
+
+def test_extract_guess_repair_evidence_keeps_raw_and_repaired_code():
+    from waybill_ocr.container_code.extractor import extract_guess_repair_evidence
+
+    evidence = extract_guess_repair_evidence("OCR UACUSSO2014 UACUS5O2014")
+
+    assert [(item.raw, item.repaired) for item in evidence] == [
+        ("UACUSSO2014", "UACU5502014"),
+        ("UACUS5O2014", "UACU5502014"),
+    ]
+    assert all(item.repaired_valid for item in evidence)
