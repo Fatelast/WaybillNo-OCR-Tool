@@ -305,6 +305,7 @@ def test_process_file_records_guess_like_candidate_without_final_replacement(tmp
     assert result.source is None
     assert result.failure_reason == "NO_CONTAINER_CANDIDATE"
     assert result.review_note == "\u7591\u4f3c\u5019\u9009: HNKU633I795\uff1b\u53ef\u80fd\u4fee\u6b63: HNKU6331795\uff08\u672a\u81ea\u52a8\u91c7\u7528\uff09"
+    assert result.review_code == "HNKU6331795"
 
 
 def test_process_file_prefers_region_ocr_candidate_over_filename_fallback(monkeypatch):
@@ -418,6 +419,7 @@ def test_process_file_fast_mode_records_guess_repair_as_review_note_only(tmp_pat
     assert result.status == RecognitionStatus.UNRECOGNIZED
     assert result.container_code is None
     assert result.review_note == "\u7591\u4f3c\u5019\u9009: HNKU633I795\uff1b\u53ef\u80fd\u4fee\u6b63: HNKU6331795\uff08\u672a\u81ea\u52a8\u91c7\u7528\uff09"
+    assert result.review_code == "HNKU6331795"
 
 
 
@@ -580,3 +582,22 @@ def test_process_file_continues_after_single_region_ocr_failure(tmp_path: Path, 
     assert result.container_code == "GESU5903360"
     assert "\u533a\u57df OCR \u5931\u8d25" in result.ocr_text
 
+
+
+def test_process_file_does_not_set_review_code_for_ambiguous_single_digit_repair(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_enhanced_ocr_regions", lambda *_args: [], raising=False)
+
+    result = process_file(task, AppConfig(), FakeOcrEngine("OCR YYCU6002610"))
+
+    assert result.status == RecognitionStatus.INVALID
+    assert result.container_code == "YYCU6002610"
+    assert result.failure_reason == "INVALID_CHECK_DIGIT"
+    assert result.review_code is None
+    assert result.review_note is None

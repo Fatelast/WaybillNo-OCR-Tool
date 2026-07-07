@@ -15,9 +15,12 @@ def test_packaging_files_exist_and_reference_bundled_resources():
 
     spec_text = app_spec.read_text(encoding="utf-8")
     assert "src/waybill_ocr/__main__.py" in spec_text
-    assert '("tools", "tools")' in spec_text
+    assert '("tools/tesseract/tesseract.exe", "tools/tesseract")' in spec_text
+    assert '("tools/tesseract/tessdata/eng.traineddata", "tools/tesseract/tessdata")' in spec_text
+    assert '("tools/poppler/Library/bin/pdftoppm.exe", "tools/poppler/Library/bin")' in spec_text
     assert '("resources", "resources")' in spec_text
-    assert 'name="运单箱号识别分拣"' in spec_text
+    assert 'APP_NAME = "运单箱号识别分拣"' in spec_text
+    assert "name=APP_NAME" in spec_text
     assert "console=False" in spec_text
 
 def test_tools_directory_documents_required_binaries():

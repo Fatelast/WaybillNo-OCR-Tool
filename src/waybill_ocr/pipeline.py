@@ -14,6 +14,7 @@ from waybill_ocr.container_code.extractor import (
     extract_invalid_candidates,
     extract_suspicious_candidates,
 )
+from waybill_ocr.container_code.validator import is_valid_container_code
 from waybill_ocr.image_loader import iter_images_for_ocr
 from waybill_ocr.image_regions import OcrRegion, iter_enhanced_ocr_regions, iter_grid_ocr_regions, iter_priority_ocr_regions
 from waybill_ocr.models import FileTask, RecognitionResult, RecognitionSource, RecognitionStatus
@@ -132,7 +133,8 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                     failure_reason="INVALID_CHECK_DIGIT",
                     ocr_text=combined_text,
                     started=started,
-                    review_note=_final_review_note(combined_text),
+                    review_note=_invalid_review_note(invalid_candidates[0], combined_text),
+                    review_code=_review_code_for_invalid_candidate(invalid_candidates[0], combined_text),
                 )
 
             if _should_run_enhancement(config):
@@ -166,6 +168,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             ocr_text=combined_text,
             started=started,
             review_note=_final_review_note(combined_text),
+            review_code=_review_code_from_text(combined_text),
         )
     except ProcessingCancelled:
         raise
@@ -207,6 +210,8 @@ def _filename_fallback_result(task: FileTask, ocr_text: str, started: float) -> 
             failure_reason="INVALID_CHECK_DIGIT",
             ocr_text=ocr_text,
             started=started,
+            review_note=_invalid_review_note(invalid_filename_candidates[0], ocr_text),
+            review_code=_review_code_for_invalid_candidate(invalid_filename_candidates[0], ocr_text),
         )
 
     return None
@@ -272,6 +277,7 @@ def _build_conflict_result(task: FileTask, code: str, ocr_text: str, started: fl
         ocr_text=ocr_text,
         started=started,
         review_note="\uff1b".join(parts),
+        review_code=code,
     )
 
 
@@ -414,6 +420,46 @@ def _selection_review_note(selection) -> str | None:
     return None
 
 
+def _invalid_review_note(candidate: str, ocr_text: str) -> str | None:
+    repair = _single_digit_check_repair(candidate)
+    note = _final_review_note(ocr_text)
+    if repair:
+        repair_note = f"疑似校验修正: {candidate} -> {repair}（待人工确认）"
+        return f"{repair_note}；{note}" if note else repair_note
+    return note
+
+
+def _review_code_for_invalid_candidate(candidate: str, ocr_text: str) -> str | None:
+    repair = _single_digit_check_repair(candidate)
+    if repair:
+        return repair
+    return _review_code_from_text(ocr_text)
+
+
+def _review_code_from_text(ocr_text: str) -> str | None:
+    repaired_codes = {repaired for _raw, repaired in extract_guess_repair_suggestions(ocr_text)}
+    if len(repaired_codes) == 1:
+        return next(iter(repaired_codes))
+    return None
+
+
+def _single_digit_check_repair(candidate: str) -> str | None:
+    if len(candidate) != 11 or not candidate[:3].isalpha() or candidate[3] != "U" or not candidate[4:].isdigit():
+        return None
+
+    repairs: list[str] = []
+    for index in range(4, 10):
+        original_digit = candidate[index]
+        for digit in "0123456789":
+            if digit == original_digit:
+                continue
+            repaired = f"{candidate[:index]}{digit}{candidate[index + 1:]}"
+            if is_valid_container_code(repaired) and repaired not in repairs:
+                repairs.append(repaired)
+    if len(repairs) == 1:
+        return repairs[0]
+    return None
+
 def _final_review_note(ocr_text: str) -> str | None:
     suspicious_note = _suspicious_note(ocr_text)
     if suspicious_note:
@@ -451,6 +497,7 @@ def _build_result(
     ocr_text: str,
     started: float,
     review_note: str | None = None,
+    review_code: str | None = None,
 ) -> RecognitionResult:
     return RecognitionResult(
         source_path=task.source_path,
@@ -463,6 +510,7 @@ def _build_result(
         elapsed_ms=int((time.perf_counter() - started) * 1000),
         relative_name=task.relative_name,
         review_note=review_note,
+        review_code=review_code,
     )
 
 

@@ -8,18 +8,11 @@ from waybill_ocr.container_code.expected_codes import ComparisonReport
 from waybill_ocr.models import RecognitionResult, RecognitionStatus
 
 
-HEADERS = [
-    "原始文件名",
-    "识别箱号",
-    "识别状态",
-    "识别来源",
-    "失败原因",
-    "处理耗时ms",
-    "备注",
-    "相对路径",
-]
+HEADERS = ["原始文件名", "识别箱号", "识别状态", "处理耗时ms", "备注"]
+INTERNAL_INDEX_SHEET_NAME = "内部索引"
+INTERNAL_INDEX_HEADERS = ["原始文件名", "相对路径", "原始识别箱号", "识别来源", "失败原因", "复核候选", "识别状态"]
 ERROR_ROW_FILL = PatternFill(fill_type="solid", fgColor="FFC7CE")
-COLUMN_WIDTHS = {"A": 52, "B": 18, "C": 14, "D": 14, "E": 28, "F": 14, "G": 42, "H": 36}
+COLUMN_WIDTHS = {"A": 52, "B": 18, "C": 14, "D": 14, "E": 52}
 COMPARISON_HEADERS = ["已匹配箱号", "缺失箱号", "多余识别箱号", "格式无效"]
 
 
@@ -39,17 +32,16 @@ def write_results(
         sheet.append(
             [
                 result.original_name,
-                result.container_code or "",
+                _display_container_code(result),
                 result.status.value,
-                result.source.value if result.source else "",
-                result.failure_reason or "",
                 result.elapsed_ms,
                 result.review_note or "",
-                result.relative_name or "",
             ]
         )
         if result.status is not RecognitionStatus.SUCCESS:
             _highlight_row(sheet[sheet.max_row][: len(HEADERS)])
+
+    _append_internal_index_sheet(workbook, results)
 
     if comparison_report is not None:
         _append_comparison_sheet(workbook, comparison_report)
@@ -58,6 +50,30 @@ def write_results(
     target_path = workbook_path or output_dir / RESULT_WORKBOOK_NAME
     workbook.save(target_path)
     return target_path
+
+
+def _display_container_code(result: RecognitionResult) -> str:
+    if result.status is not RecognitionStatus.SUCCESS and result.review_code:
+        return result.review_code
+    return result.container_code or ""
+
+
+def _append_internal_index_sheet(workbook, results: list[RecognitionResult]) -> None:
+    sheet = workbook.create_sheet(INTERNAL_INDEX_SHEET_NAME)
+    sheet.sheet_state = "hidden"
+    sheet.append(INTERNAL_INDEX_HEADERS)
+    for result in results:
+        sheet.append(
+            [
+                result.original_name,
+                result.relative_name or "",
+                result.container_code or "",
+                result.source.value if result.source else "",
+                result.failure_reason or "",
+                result.review_code or "",
+                result.status.value,
+            ]
+        )
 
 
 def _highlight_row(cells) -> None:

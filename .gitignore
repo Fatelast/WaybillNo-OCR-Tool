@@ -24,4 +24,5 @@ local-env.ps1
 .tmp/
 .codegraph/
 .pytest-tmp/
+.pytest-*/
 *离线版.zip

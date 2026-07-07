@@ -15,7 +15,7 @@ from waybill_ocr.file_scanner import scan_input_files
 from waybill_ocr.models import FileTask, RecognitionResult, RecognitionSource, RecognitionStatus
 from waybill_ocr.ocr.base import OcrEngine
 from waybill_ocr.output.classifier import copy_result_file
-from waybill_ocr.output.excel_writer import write_results
+from waybill_ocr.output.excel_writer import INTERNAL_INDEX_SHEET_NAME, write_results
 from waybill_ocr.pipeline import process_file
 
 ProgressCallback = Callable[[str], None]
@@ -150,7 +150,7 @@ def _load_existing_results(
     workbook = None
     try:
         workbook = load_workbook(workbook_path, read_only=True, data_only=True)
-        sheet = workbook.active
+        sheet = workbook[INTERNAL_INDEX_SHEET_NAME] if INTERNAL_INDEX_SHEET_NAME in workbook.sheetnames else workbook.active
         rows = sheet.iter_rows(values_only=True)
         headers = {name: index for index, name in enumerate(next(rows, [])) if name}
         results: dict[str, RecognitionResult] = {}
@@ -170,13 +170,17 @@ def _load_existing_results(
                 source_path=task.source_path,
                 original_name=original_name,
                 status=status,
-                container_code=_optional_string(_row_value(row, headers, "识别箱号")),
+                container_code=(
+                    _optional_string(_row_value(row, headers, "原始识别箱号"))
+                    or _optional_string(_row_value(row, headers, "识别箱号"))
+                ),
                 source=_recognition_source(_row_value(row, headers, "识别来源")),
                 failure_reason=_optional_string(_row_value(row, headers, "失败原因")),
                 ocr_text="",
                 elapsed_ms=_optional_int(_row_value(row, headers, "处理耗时ms")),
                 relative_name=result_relative_name,
                 review_note=_optional_string(_row_value(row, headers, "备注")),
+                review_code=_optional_string(_row_value(row, headers, "复核候选")),
             )
         return results
     except Exception as exc:
@@ -185,7 +189,6 @@ def _load_existing_results(
     finally:
         if workbook is not None:
             workbook.close()
-
 
 def _tasks_by_unique_name(tasks: list[FileTask]) -> dict[str, FileTask]:
     counts: dict[str, int] = {}

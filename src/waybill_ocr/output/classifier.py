@@ -25,8 +25,11 @@ def copy_result_file(result: RecognitionResult, output_dir: Path) -> Path:
 
 
 def _target_file_name(result: RecognitionResult) -> str:
+    suffix = Path(result.original_name).suffix
     if result.status == RecognitionStatus.SUCCESS and result.container_code:
-        return f"{result.container_code}{Path(result.original_name).suffix}"
+        return f"{result.container_code}{suffix}"
+    if result.status in {RecognitionStatus.UNRECOGNIZED, RecognitionStatus.INVALID} and result.review_code:
+        return f"{result.review_code}-待确认{suffix}"
 
     return result.original_name
 
