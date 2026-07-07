@@ -61,6 +61,25 @@ def _runtime_datas():
     return datas
 
 
+ROOT_DUPLICATE_TOOL_DLL_EXCLUDES = {
+    "libicudt75.dll",
+    "libicuin75.dll",
+    "libicuuc75.dll",
+    "libtesseract-5.dll",
+    "libleptonica-6.dll",
+    "poppler.dll",
+}
+
+
+def _without_duplicate_tool_binaries(toc):
+    def keep(entry):
+        destination = Path(entry[0])
+        if destination.parent != Path("."):
+            return True
+        return destination.name.lower() not in ROOT_DUPLICATE_TOOL_DLL_EXCLUDES
+
+    return type(toc)(entry for entry in toc if keep(entry))
+
 a = Analysis(
     ["src/waybill_ocr/__main__.py"],
     pathex=["src"],
@@ -73,6 +92,7 @@ a = Analysis(
     excludes=PYINSTALLER_EXCLUDES,
     noarchive=False,
 )
+a.binaries = _without_duplicate_tool_binaries(a.binaries)
 pyz = PYZ(a.pure)
 
 exe = EXE(
