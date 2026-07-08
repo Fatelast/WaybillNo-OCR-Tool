@@ -1,6 +1,6 @@
 import shutil
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -20,6 +20,18 @@ from waybill_ocr.output.excel_writer import INTERNAL_INDEX_SHEET_NAME, write_res
 from waybill_ocr.pipeline import process_file
 
 ProgressCallback = Callable[[str], None]
+
+
+@dataclass(frozen=True)
+class ProcessingProgressEvent:
+    kind: str
+    total: int = 0
+    result: RecognitionResult | None = None
+
+
+ProgressEventCallback = Callable[[ProcessingProgressEvent], None]
+
+
 def process_directory(
     input_dir: Path,
     output_dir: Path,
@@ -29,10 +41,12 @@ def process_directory(
     cancel_event=None,
     expected_codes: list[str] | None = None,
     expected_invalid_entries: list[str] | None = None,
+    on_progress_event: ProgressEventCallback | None = None,
 ) -> list[RecognitionResult]:
     tasks = _exclude_output_tasks(scan_input_files(input_dir), output_dir)
     existing_results = _load_existing_results(tasks, output_dir, on_progress)
     _emit(on_progress, f"\u626b\u63cf\u5230 {len(tasks)} \u4e2a\u6587\u4ef6")
+    _emit_event(on_progress_event, ProcessingProgressEvent(kind="scanned", total=len(tasks)))
 
     results: list[RecognitionResult] = []
     workbook_path: Path | None = None
@@ -45,6 +59,7 @@ def process_directory(
                 results.append(existing_result)
                 _emit(on_progress, f"\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: {task.relative_name}")
                 _emit(on_progress, _format_result_message(existing_result))
+                _emit_event(on_progress_event, ProcessingProgressEvent(kind="result", result=existing_result))
                 continue
 
             started_at = perf_counter()
@@ -65,6 +80,7 @@ def process_directory(
                 _copy_failed_result(result, output_dir, on_progress)
 
             results.append(result)
+            _emit_event(on_progress_event, ProcessingProgressEvent(kind="result", result=result))
             workbook_path = _write_results(
                 results, output_dir, workbook_path, on_progress, expected_codes, expected_invalid_entries
             )
@@ -72,11 +88,13 @@ def process_directory(
 
         _emit_comparison_report(expected_codes, results, on_progress, expected_invalid_entries)
         _emit(on_progress, "\u5904\u7406\u5b8c\u6210")
+        _emit_event(on_progress_event, ProcessingProgressEvent(kind="complete"))
         return results
     except ProcessingCancelled:
         if results:
             _write_results(results, output_dir, workbook_path, on_progress, expected_codes, expected_invalid_entries)
         _emit(on_progress, f"\u5df2\u53d6\u6d88\uff1a\u5df2\u5904\u7406 {len(results)}/{total}")
+        _emit_event(on_progress_event, ProcessingProgressEvent(kind="cancelled"))
         return results
     finally:
         _cleanup_work_dir(config)
@@ -312,6 +330,11 @@ def _close_iterator(iterator) -> None:
     close = getattr(iterator, "close", None)
     if close:
         close()
+
+
+def _emit_event(on_progress_event: ProgressEventCallback | None, event: ProcessingProgressEvent) -> None:
+    if on_progress_event:
+        on_progress_event(event)
 
 
 def _emit(on_progress: ProgressCallback | None, message: str) -> None:

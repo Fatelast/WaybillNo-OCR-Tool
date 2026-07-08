@@ -1,11 +1,11 @@
 import os
-import re
 import threading
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from waybill_ocr.batch_processor import ProcessingProgressEvent
 from waybill_ocr.config import (
     OCR_SPEED_BALANCED,
     OCR_SPEED_FAST,
@@ -16,6 +16,7 @@ from waybill_ocr.config import (
 from waybill_ocr.container_code.expected_codes import inspect_expected_codes
 from waybill_ocr.delivery import APP_NAME, CURRENT_VERSION
 from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
+from waybill_ocr.models import RecognitionStatus
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
 from waybill_ocr.ui.task_runner import DirectoryTask, process_directory_tasks
 
@@ -556,6 +557,7 @@ class MainWindow:
                 engine_factory=TesseractEngine,
                 on_progress=self._append_log,
                 cancel_event=cancel_event,
+                on_progress_event=self._handle_task_progress_event,
                 max_workers=self._max_workers_for_speed(),
             )
         except Exception as exc:
@@ -599,9 +601,26 @@ class MainWindow:
             self.log_text.insert(tk.END, f"{message}\n")
             self.log_text.see(tk.END)
             self.progress_var.set(message)
-            self._update_task_progress_from_message(message)
 
         self.root.after(0, append)
+
+    def _handle_task_progress_event(self, task_number: int, event: ProcessingProgressEvent) -> None:
+        self.root.after(0, lambda: self._apply_task_progress_event(task_number, event))
+
+    def _apply_task_progress_event(self, task_number: int, event: ProcessingProgressEvent) -> None:
+        task_index = task_number - 1
+        if task_index < 0 or task_index >= len(self.task_progress_states):
+            return
+
+        state = self.task_progress_states[task_index]
+        if event.kind == "scanned":
+            state["total"] = event.total
+        elif event.kind == "result" and event.result is not None:
+            self._record_task_result(state, event.result.status)
+        elif event.kind not in {"complete", "cancelled"}:
+            return
+
+        self._render_task_progress(task_index)
 
 
     def _config_for_speed(self, config):
@@ -661,39 +680,14 @@ class MainWindow:
             row["progressbar"].config(maximum=1, value=0)
             row["open_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
 
-    def _update_task_progress_from_message(self, message: str) -> None:
-        match = re.match(r"^\[任务 (\d+)/(\d+)\] (.*)$", message)
-        if not match:
-            return
-
-        task_index = int(match.group(1)) - 1
-        if task_index < 0 or task_index >= len(self.task_progress_states):
-            return
-
-        detail = match.group(3)
-        state = self.task_progress_states[task_index]
-        scan_match = re.search(r"扫描到 (\d+) 个文件", detail)
-        if scan_match:
-            state["total"] = int(scan_match.group(1))
-            self._render_task_progress(task_index)
-            return
-
-        if detail.startswith("结果:"):
-            self._record_task_result(state, detail)
-            self._render_task_progress(task_index)
-            return
-
-        if detail in {"处理完成", "已取消"}:
-            self._render_task_progress(task_index)
-
-    def _record_task_result(self, state: dict, detail: str) -> None:
+    def _record_task_result(self, state: dict, status: RecognitionStatus) -> None:
         total = state["total"]
         state["processed"] = min(state["processed"] + 1, total) if total else state["processed"] + 1
-        if "-> 正确识别" in detail:
+        if status == RecognitionStatus.SUCCESS:
             state["success"] += 1
-        elif "-> 箱号错误" in detail:
+        elif status == RecognitionStatus.INVALID:
             state["invalid"] += 1
-        elif "-> 未识别" in detail:
+        elif status == RecognitionStatus.UNRECOGNIZED:
             state["unrecognized"] += 1
 
     def _render_task_progress(self, task_index: int) -> None:

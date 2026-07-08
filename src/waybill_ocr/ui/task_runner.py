@@ -1,15 +1,17 @@
+import inspect
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from waybill_ocr.batch_processor import process_directory
+from waybill_ocr.batch_processor import ProcessingProgressEvent, process_directory
 from waybill_ocr.cancellation import ProcessingCancelled
 from waybill_ocr.config import AppConfig
 from waybill_ocr.container_code.expected_codes import inspect_expected_codes
 from waybill_ocr.models import RecognitionResult
 
 ProgressCallback = Callable[[str], None]
+TaskProgressCallback = Callable[[int, ProcessingProgressEvent], None]
 EngineFactory = Callable[[AppConfig], object]
 ProcessDirectoryFunc = Callable[..., list[RecognitionResult]]
 
@@ -28,6 +30,7 @@ def process_directory_tasks(
     engine_factory: EngineFactory,
     on_progress: ProgressCallback | None = None,
     cancel_event=None,
+    on_progress_event: TaskProgressCallback | None = None,
     max_workers: int = 2,
     process_directory_func: ProcessDirectoryFunc = process_directory,
 ) -> list[RecognitionResult]:
@@ -46,6 +49,7 @@ def process_directory_tasks(
                 engine_factory,
                 on_progress,
                 cancel_event,
+                on_progress_event,
                 process_directory_func,
             )
             for task_number, task in enumerate(tasks, start=1)
@@ -63,6 +67,7 @@ def _process_one_task(
     engine_factory: EngineFactory,
     on_progress: ProgressCallback | None,
     cancel_event,
+    on_progress_event: TaskProgressCallback | None,
     process_directory_func: ProcessDirectoryFunc,
 ) -> list[RecognitionResult]:
     config = _task_config(base_config, task_number)
@@ -72,11 +77,17 @@ def _process_one_task(
         if on_progress:
             on_progress(f"[{task.label}] {message}")
 
+    def prefixed_progress_event(event: ProcessingProgressEvent) -> None:
+        if on_progress_event:
+            on_progress_event(task_number, event)
+
     expected_inspection = inspect_expected_codes(task.expected_codes_path) if task.expected_codes_path else None
     kwargs = {"cancel_event": cancel_event}
     if expected_inspection is not None:
         kwargs["expected_codes"] = expected_inspection.valid_codes
         kwargs["expected_invalid_entries"] = expected_inspection.invalid_entries
+    if _accepts_keyword(process_directory_func, "on_progress_event"):
+        kwargs["on_progress_event"] = prefixed_progress_event
 
     try:
         return process_directory_func(
@@ -93,6 +104,13 @@ def _process_one_task(
     except Exception as exc:
         prefixed_progress(f"任务处理失败，已跳过该任务: {exc}")
         return []
+
+
+def _accepts_keyword(func: ProcessDirectoryFunc, keyword: str) -> bool:
+    signature = inspect.signature(func)
+    return keyword in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+    )
 
 
 def _task_config(base_config: AppConfig, task_number: int) -> AppConfig:

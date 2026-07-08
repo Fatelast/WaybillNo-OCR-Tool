@@ -159,3 +159,10 @@ def test_speed_mode_descriptions_are_user_scenario_based():
     assert "默认推荐" in main_window.SPEED_MODE_DESCRIPTIONS[main_window.OCR_SPEED_BALANCED]
     assert "模糊" in main_window.SPEED_MODE_DESCRIPTIONS[main_window.OCR_SPEED_STABLE]
     assert "PSM" not in main_window.SPEED_MODE_DESCRIPTIONS[main_window.OCR_SPEED_STABLE]
+
+def test_main_window_uses_structured_progress_events_for_task_state():
+    source = (Path(__file__).resolve().parents[1] / "src" / "waybill_ocr" / "ui" / "main_window.py").read_text(encoding="utf-8")
+
+    assert "on_progress_event=self._handle_task_progress_event" in source
+    assert "_update_task_progress_from_message" not in source
+    assert "re.match" not in source

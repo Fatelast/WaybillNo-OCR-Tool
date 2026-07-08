@@ -2,7 +2,8 @@ import threading
 from pathlib import Path
 
 from waybill_ocr.config import AppConfig
-from waybill_ocr.models import RecognitionResult
+from waybill_ocr.batch_processor import ProcessingProgressEvent
+from waybill_ocr.models import RecognitionResult, RecognitionStatus
 from waybill_ocr.ui.task_runner import DirectoryTask, process_directory_tasks
 
 
@@ -229,3 +230,46 @@ def test_process_directory_tasks_stable_worker_limit_runs_one_group_at_a_time(tm
     )
 
     assert max_running == 1
+
+def test_process_directory_tasks_forwards_structured_progress_events():
+    input_dir = Path("input")
+    output_dir = Path("output")
+    source = input_dir / "waybill.pdf"
+    events = []
+
+    result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=None,
+        failure_reason=None,
+        ocr_text="",
+        elapsed_ms=1,
+        relative_name=source.name,
+    )
+
+    def fake_process_directory(
+        input_dir,
+        output_dir,
+        config,
+        ocr_engine,
+        on_progress,
+        cancel_event=None,
+        on_progress_event=None,
+    ):
+        assert on_progress_event is not None
+        on_progress("this log text should not drive GUI state")
+        on_progress_event(ProcessingProgressEvent(kind="scanned", total=1))
+        on_progress_event(ProcessingProgressEvent(kind="result", result=result))
+        return [result]
+
+    process_directory_tasks(
+        tasks=[DirectoryTask(input_dir=input_dir, output_dir=output_dir, label="任务 1/1")],
+        base_config=AppConfig(work_dir=Path("work")),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+        on_progress_event=lambda task_number, event: events.append((task_number, event)),
+    )
+
+    assert [(task_number, event.kind) for task_number, event in events] == [(1, "scanned"), (1, "result")]
