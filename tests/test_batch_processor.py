@@ -622,3 +622,40 @@ def test_load_existing_results_falls_back_to_original_name_for_old_workbook(tmp_
 
     assert processed == []
     assert [result.original_name for result in results] == ["legacy.jpg"]
+
+
+def test_process_directory_uses_expected_list_review_code_before_copy(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+
+    def fake_process_file(task: FileTask, _config: AppConfig, _ocr_engine: FakeOcrEngine, cancel_event=None):
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.UNRECOGNIZED,
+            container_code=None,
+            source=None,
+            failure_reason="NO_CONTAINER_CANDIDATE",
+            ocr_text="OCR HNKU6331795 GESU5903360",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        expected_codes=["GESU5903360"],
+    )
+
+    assert results[0].status is RecognitionStatus.UNRECOGNIZED
+    assert results[0].review_code == "GESU5903360"
+    assert any(path.name == "GESU5903360-待确认.jpg" for path in output_dir.rglob("*.jpg"))
+    workbook = load_workbook(output_dir / "识别结果.xlsx")
+    assert workbook.active["B2"].value == "GESU5903360"
+    assert workbook.active["C2"].value == RecognitionStatus.UNRECOGNIZED.value

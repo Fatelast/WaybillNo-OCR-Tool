@@ -11,6 +11,7 @@ from waybill_ocr.cancellation import ProcessingCancelled, raise_if_cancelled
 from waybill_ocr.config import AppConfig
 from waybill_ocr.constants import RESULT_WORKBOOK_NAME
 from waybill_ocr.container_code.expected_codes import compare_expected_codes
+from waybill_ocr.container_code.review_candidates import apply_expected_review_code
 from waybill_ocr.file_scanner import scan_input_files
 from waybill_ocr.models import FileTask, RecognitionResult, RecognitionSource, RecognitionStatus
 from waybill_ocr.ocr.base import OcrEngine
@@ -53,6 +54,7 @@ def process_directory(
                 result = process_file(task, config, ocr_engine, cancel_event=cancel_event)
                 if result.relative_name is None:
                     result = replace(result, relative_name=task.relative_name)
+                result = apply_expected_review_code(result, expected_codes)
                 raise_if_cancelled(cancel_event)
                 copy_result_file(result, output_dir)
             except ProcessingCancelled:

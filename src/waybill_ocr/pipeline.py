@@ -10,6 +10,7 @@ from waybill_ocr.container_code.candidate_selector import (
     score_review_candidates,
     select_best_candidate_with_score,
 )
+from waybill_ocr.container_code.review_candidates import single_digit_check_repair, single_digit_check_repairs
 from waybill_ocr.container_code.extractor import (
     extract_candidates,
     extract_guess_repair_suggestions,
@@ -300,7 +301,7 @@ def _is_confirmed_invalid_repair(
     enhanced_text: str,
     config: AppConfig,
 ) -> bool:
-    repairs = _single_digit_check_repairs(invalid_candidate)
+    repairs = single_digit_check_repairs(invalid_candidate)
     if not _is_related_enhanced_candidate(invalid_candidate, enhanced_code, repairs):
         return False
     candidates = list(dict.fromkeys([*repairs, enhanced_code]))
@@ -509,7 +510,7 @@ def _invalid_review_note(candidate: str, ocr_text: str) -> str | None:
 
 
 def _review_code_for_invalid_candidate(candidate: str, ocr_text: str) -> str | None:
-    repair = _single_digit_check_repair(candidate)
+    repair = single_digit_check_repair(candidate)
     if repair:
         return repair
     return _review_code_from_text(ocr_text)
@@ -523,7 +524,7 @@ def _review_code_from_text(ocr_text: str) -> str | None:
 
 
 def _format_single_digit_repair_note(candidate: str) -> str | None:
-    repairs = _single_digit_check_repairs(candidate)
+    repairs = single_digit_check_repairs(candidate)
     if len(repairs) == 1:
         return f"疑似校验修正: {candidate} -> {repairs[0]}（待人工确认）"
     if len(repairs) > 1:
@@ -533,27 +534,6 @@ def _format_single_digit_repair_note(candidate: str) -> str | None:
     return None
 
 
-def _single_digit_check_repair(candidate: str) -> str | None:
-    repairs = _single_digit_check_repairs(candidate)
-    if len(repairs) == 1:
-        return repairs[0]
-    return None
-
-
-def _single_digit_check_repairs(candidate: str) -> list[str]:
-    if len(candidate) != 11 or not candidate[:3].isalpha() or candidate[3] != "U" or not candidate[4:].isdigit():
-        return []
-
-    repairs: list[str] = []
-    for index in range(4, 10):
-        original_digit = candidate[index]
-        for digit in "0123456789":
-            if digit == original_digit:
-                continue
-            repaired = f"{candidate[:index]}{digit}{candidate[index + 1:]}"
-            if is_valid_container_code(repaired) and repaired not in repairs:
-                repairs.append(repaired)
-    return repairs
 
 
 def _final_review_note(ocr_text: str) -> str | None:
