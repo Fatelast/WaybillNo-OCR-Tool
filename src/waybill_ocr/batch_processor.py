@@ -50,12 +50,13 @@ def process_directory(
 
     results: list[RecognitionResult] = []
     workbook_path: Path | None = None
+    latest_comparison_report = None
     total = len(tasks)
     try:
         for index, task in enumerate(tasks, start=1):
             raise_if_cancelled(cancel_event)
             existing_result = existing_results.get(task.relative_name) or existing_results.get(task.source_path.name)
-            if existing_result is not None:
+            if existing_result is not None and _should_skip_existing_result(existing_result):
                 results.append(existing_result)
                 _emit(on_progress, f"\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: {task.relative_name}")
                 _emit(on_progress, _format_result_message(existing_result))
@@ -81,23 +82,36 @@ def process_directory(
 
             results.append(result)
             _emit_event(on_progress_event, ProcessingProgressEvent(kind="result", result=result))
+            latest_comparison_report = _comparison_report(expected_codes, results, expected_invalid_entries)
             workbook_path = _write_results(
-                results, output_dir, workbook_path, on_progress, expected_codes, expected_invalid_entries
+                results, output_dir, workbook_path, on_progress, latest_comparison_report
             )
             _emit(on_progress, _format_result_message(result))
 
-        _emit_comparison_report(expected_codes, results, on_progress, expected_invalid_entries)
+        if latest_comparison_report is None:
+            latest_comparison_report = _comparison_report(expected_codes, results, expected_invalid_entries)
+        _emit_comparison_report(latest_comparison_report, on_progress)
         _emit(on_progress, "\u5904\u7406\u5b8c\u6210")
         _emit_event(on_progress_event, ProcessingProgressEvent(kind="complete"))
         return results
     except ProcessingCancelled:
         if results:
-            _write_results(results, output_dir, workbook_path, on_progress, expected_codes, expected_invalid_entries)
+            _write_results(
+                results,
+                output_dir,
+                workbook_path,
+                on_progress,
+                _comparison_report(expected_codes, results, expected_invalid_entries),
+            )
         _emit(on_progress, f"\u5df2\u53d6\u6d88\uff1a\u5df2\u5904\u7406 {len(results)}/{total}")
         _emit_event(on_progress_event, ProcessingProgressEvent(kind="cancelled"))
         return results
     finally:
         _cleanup_work_dir(config)
+
+
+def _should_skip_existing_result(result: RecognitionResult) -> bool:
+    return result.status is RecognitionStatus.SUCCESS
 
 
 def _failed_result(task: FileTask, reason: str, started_at: float) -> RecognitionResult:
@@ -127,15 +141,14 @@ def _write_results(
     output_dir: Path,
     workbook_path: Path | None,
     on_progress: ProgressCallback | None,
-    expected_codes: list[str] | None = None,
-    expected_invalid_entries: list[str] | None = None,
+    comparison_report=None,
 ) -> Path | None:
     try:
         return write_results(
             results,
             output_dir,
             workbook_path=workbook_path,
-            comparison_report=_comparison_report(expected_codes, results, expected_invalid_entries),
+            comparison_report=comparison_report,
         )
     except PermissionError as exc:
         if workbook_path is not None:
@@ -149,7 +162,7 @@ def _write_results(
                 results,
                 output_dir,
                 workbook_path=fallback_path,
-                comparison_report=_comparison_report(expected_codes, results, expected_invalid_entries),
+                comparison_report=comparison_report,
             )
         except PermissionError as fallback_exc:
             _emit(on_progress, f"\u7ed3\u679c\u8868\u5199\u5165\u5931\u8d25\uff0c\u5df2\u7ee7\u7eed\u5904\u7406: {fallback_exc}")
@@ -280,15 +293,12 @@ def _comparison_report(
 
 
 def _emit_comparison_report(
-    expected_codes: list[str] | None,
-    results: list[RecognitionResult],
+    report,
     on_progress: ProgressCallback | None,
-    expected_invalid_entries: list[str] | None = None,
 ) -> None:
-    if expected_codes is None and not expected_invalid_entries:
+    if report is None:
         return
 
-    report = compare_expected_codes(expected_codes or [], results, expected_invalid_entries)
     _emit(
         on_progress,
         f"\u7bb1\u53f7\u6bd4\u5bf9: \u5df2\u5339\u914d {len(report.matched_codes)}, \u7f3a\u5931 {len(report.missing_codes)}, "

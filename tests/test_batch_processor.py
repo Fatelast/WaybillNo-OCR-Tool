@@ -422,6 +422,46 @@ def test_process_directory_logs_expected_code_comparison(tmp_path: Path, monkeyp
 
 
 
+def test_process_directory_reuses_latest_comparison_report_for_final_log(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    (input_dir / "first.jpg").write_bytes(b"first")
+    (input_dir / "second.jpg").write_bytes(b"second")
+    comparison_calls = []
+
+    def fake_process_file(task: FileTask, _config: AppConfig, _ocr_engine: FakeOcrEngine, cancel_event=None):
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    original_compare = batch_module.compare_expected_codes
+
+    def counting_compare_expected_codes(expected_codes, results, invalid_expected_entries=None):
+        comparison_calls.append(len(results))
+        return original_compare(expected_codes, results, invalid_expected_entries)
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+    monkeypatch.setattr(batch_module, "compare_expected_codes", counting_compare_expected_codes)
+
+    batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        expected_codes=["HNKU6331795", "GESU5903360"],
+    )
+
+    assert comparison_calls == [1, 2]
+
+
 def test_process_directory_skips_files_already_recorded_in_workbook(tmp_path: Path, monkeypatch):
     from waybill_ocr.output.excel_writer import write_results
 
@@ -481,6 +521,102 @@ def test_process_directory_skips_files_already_recorded_in_workbook(tmp_path: Pa
     assert [workbook.active["A3"].value, workbook.active["B3"].value] == ["second.jpg", "GESU5903360"]
     assert any("\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: first.jpg" == message for message in progress_messages)
     assert any("first.jpg" in message and "HNKU6331795" in message for message in progress_messages)
+
+
+def test_process_directory_reprocesses_existing_unrecognized_result(tmp_path: Path, monkeypatch):
+    from waybill_ocr.output.excel_writer import write_results
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "failed.jpg"
+    source_path.write_bytes(b"failed")
+    existing_result = RecognitionResult(
+        source_path=source_path,
+        original_name=source_path.name,
+        status=RecognitionStatus.UNRECOGNIZED,
+        container_code=None,
+        source=None,
+        failure_reason="NO_CONTAINER_CANDIDATE",
+        ocr_text="",
+        elapsed_ms=1,
+    )
+    write_results([existing_result], output_dir)
+    processed = []
+
+    def fake_process_file(task: FileTask, _config: AppConfig, _ocr_engine: FakeOcrEngine, cancel_event=None):
+        processed.append(task.relative_name)
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    assert processed == ["failed.jpg"]
+    assert results[0].status is RecognitionStatus.SUCCESS
+    assert results[0].container_code == "HNKU6331795"
+
+
+def test_process_directory_reprocesses_existing_invalid_result(tmp_path: Path, monkeypatch):
+    from waybill_ocr.output.excel_writer import write_results
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "invalid.jpg"
+    source_path.write_bytes(b"invalid")
+    existing_result = RecognitionResult(
+        source_path=source_path,
+        original_name=source_path.name,
+        status=RecognitionStatus.INVALID,
+        container_code="HNKU6331794",
+        source=RecognitionSource.OCR,
+        failure_reason="INVALID_CHECK_DIGIT",
+        ocr_text="",
+        elapsed_ms=1,
+    )
+    write_results([existing_result], output_dir)
+    processed = []
+
+    def fake_process_file(task: FileTask, _config: AppConfig, _ocr_engine: FakeOcrEngine, cancel_event=None):
+        processed.append(task.relative_name)
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    assert processed == ["invalid.jpg"]
+    assert results[0].status is RecognitionStatus.SUCCESS
+    assert results[0].container_code == "HNKU6331795"
 
 
 def test_process_directory_does_not_save_evidence_image_for_non_success_result(tmp_path: Path, monkeypatch):

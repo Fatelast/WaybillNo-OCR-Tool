@@ -10,12 +10,18 @@ from waybill_ocr.container_code.candidate_selector import (
     score_review_candidates,
     select_best_candidate_with_score,
 )
-from waybill_ocr.container_code.review_candidates import single_digit_check_repair, single_digit_check_repairs
+from waybill_ocr.container_code.decision import (
+    build_conflict_review_note,
+    has_candidate_conflict,
+    invalid_review_note as build_invalid_review_note,
+    review_code_for_invalid_candidate as decide_review_code_for_invalid_candidate,
+    review_code_from_text as decide_review_code_from_text,
+    suspicious_note as build_suspicious_note,
+)
+from waybill_ocr.container_code.review_candidates import single_digit_check_repairs
 from waybill_ocr.container_code.extractor import (
     extract_candidates,
-    extract_guess_repair_suggestions,
     extract_invalid_candidates,
-    extract_suspicious_candidates,
 )
 from waybill_ocr.container_code.validator import is_valid_container_code
 from waybill_ocr.image_loader import iter_images_for_ocr
@@ -145,7 +151,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                     ocr_text=combined_text,
                     started=started,
                     review_note=_invalid_review_note(invalid_candidate, combined_text),
-                    review_code=_review_code_for_invalid_candidate(invalid_candidate, combined_text),
+                    review_code=decide_review_code_for_invalid_candidate(invalid_candidate, combined_text),
                 )
 
             if _should_run_enhancement(config):
@@ -170,7 +176,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
         if filename_result:
             return filename_result
 
-        review_code = _review_code_from_text(combined_text)
+        review_code = decide_review_code_from_text(combined_text)
         return _build_result(
             task=task,
             status=RecognitionStatus.UNRECOGNIZED,
@@ -223,7 +229,7 @@ def _filename_fallback_result(task: FileTask, ocr_text: str, started: float) -> 
             ocr_text=ocr_text,
             started=started,
             review_note=_invalid_review_note(invalid_filename_candidates[0], ocr_text),
-            review_code=_review_code_for_invalid_candidate(invalid_filename_candidates[0], ocr_text),
+            review_code=decide_review_code_for_invalid_candidate(invalid_filename_candidates[0], ocr_text),
         )
 
     return None
@@ -240,7 +246,7 @@ def _resolve_valid_selection(
     started: float,
     cancel_event,
 ) -> tuple[RecognitionResult | None, str]:
-    if not _has_candidate_conflict(selection.code, combined_text):
+    if not has_candidate_conflict(selection.code, combined_text):
         return _build_success_result(task, selection, combined_text, started), combined_text
 
     if _should_run_enhancement(config):
@@ -266,20 +272,8 @@ def _resolve_valid_selection(
     return _build_conflict_result(task, selection.code, combined_text, started), combined_text
 
 
-def _has_candidate_conflict(code: str, ocr_text: str) -> bool:
-    valid_candidates = [candidate for candidate in extract_candidates(ocr_text) if candidate != code]
-    if valid_candidates:
-        return True
-
-    prefix = code[:4]
-    return any(candidate[:4] == prefix and candidate != code for candidate in extract_suspicious_candidates(ocr_text))
-
-
 def _build_conflict_result(task: FileTask, code: str, ocr_text: str, started: float) -> RecognitionResult:
-    suspicious = extract_suspicious_candidates(ocr_text)
-    parts = [f"\u5019\u9009\u51b2\u7a81\uff0c\u9700\u4eba\u5de5\u590d\u6838: {code}"]
-    if suspicious:
-        parts.append(f"\u7591\u4f3c\u5019\u9009: {', '.join(suspicious)}")
+    review_note = build_conflict_review_note(code, ocr_text)
     return _build_result(
         task=task,
         status=RecognitionStatus.INVALID,
@@ -288,7 +282,7 @@ def _build_conflict_result(task: FileTask, code: str, ocr_text: str, started: fl
         failure_reason=CONFLICTING_CANDIDATES_REASON,
         ocr_text=ocr_text,
         started=started,
-        review_note="\uff1b".join(parts),
+        review_note=review_note,
         review_code=code,
     )
 
@@ -502,42 +496,11 @@ def _selection_review_note(selection) -> str | None:
 
 
 def _invalid_review_note(candidate: str, ocr_text: str) -> str | None:
-    repair_note = _format_single_digit_repair_note(candidate)
-    note = _final_review_note(ocr_text)
-    if repair_note:
-        return f"{repair_note}；{note}" if note else repair_note
-    return note
-
-
-def _review_code_for_invalid_candidate(candidate: str, ocr_text: str) -> str | None:
-    repair = single_digit_check_repair(candidate)
-    if repair:
-        return repair
-    return _review_code_from_text(ocr_text)
-
-
-def _review_code_from_text(ocr_text: str) -> str | None:
-    repaired_codes = {repaired for _raw, repaired in extract_guess_repair_suggestions(ocr_text)}
-    if len(repaired_codes) == 1:
-        return next(iter(repaired_codes))
-    return None
-
-
-def _format_single_digit_repair_note(candidate: str) -> str | None:
-    repairs = single_digit_check_repairs(candidate)
-    if len(repairs) == 1:
-        return f"疑似校验修正: {candidate} -> {repairs[0]}（待人工确认）"
-    if len(repairs) > 1:
-        displayed = ", ".join(repairs[:8])
-        suffix = "..." if len(repairs) > 8 else ""
-        return f"多个疑似校验修正候选（未自动采用）: {displayed}{suffix}"
-    return None
-
-
+    return build_invalid_review_note(candidate, _final_review_note(ocr_text))
 
 
 def _final_review_note(ocr_text: str) -> str | None:
-    suspicious_note = _suspicious_note(ocr_text)
+    suspicious_note = build_suspicious_note(ocr_text)
     if suspicious_note:
         return suspicious_note
     if REGION_CROP_FAILURE_MARKER in ocr_text or REGION_CROP_SKIP_MARKER in ocr_text:
@@ -545,23 +508,6 @@ def _final_review_note(ocr_text: str) -> str | None:
     if REGION_OCR_FAILURE_MARKER in ocr_text:
         return "\u90e8\u5206\u533a\u57df OCR \u5931\u8d25\uff0c\u5df2\u8df3\u8fc7\u5931\u8d25\u533a\u57df\u5e76\u7ee7\u7eed\u8bc6\u522b"
     return None
-
-
-def _suspicious_note(ocr_text: str) -> str | None:
-    candidates = extract_suspicious_candidates(ocr_text)
-    suggestions = extract_guess_repair_suggestions(ocr_text)
-    if not candidates and not suggestions:
-        return None
-
-    parts = []
-    if candidates:
-        parts.append(f"\u7591\u4f3c\u5019\u9009: {', '.join(candidates)}")
-    if suggestions:
-        suggestion_text = ", ".join(f"{raw}->{repaired}" for raw, repaired in suggestions)
-        if len(suggestions) == 1:
-            suggestion_text = suggestions[0][1]
-        parts.append(f"\u53ef\u80fd\u4fee\u6b63: {suggestion_text}\uff08\u672a\u81ea\u52a8\u91c7\u7528\uff09")
-    return "\uff1b".join(parts)
 
 
 def _build_result(
