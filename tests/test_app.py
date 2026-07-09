@@ -166,3 +166,44 @@ def test_main_window_uses_structured_progress_events_for_task_state():
     assert "on_progress_event=self._handle_task_progress_event" in source
     assert "_update_task_progress_from_message" not in source
     assert "re.match" not in source
+
+
+
+def test_expected_status_preview_shows_sample_codes(monkeypatch):
+    from waybill_ocr.container_code.expected_codes import ExpectedCodeInspection
+    from waybill_ocr.ui import main_window
+
+    row = {
+        "expected_status_var": FakeVar(),
+        "expected_status_label": SimpleNamespace(config=lambda **_kwargs: None),
+    }
+    window = SimpleNamespace(task_rows=[row])
+    monkeypatch.setattr(
+        main_window,
+        "inspect_expected_codes",
+        lambda _path: ExpectedCodeInspection(
+            valid_codes=["HNKU6331795", "GESU5903360", "MSCU1234566", "YYCU6003610"],
+            duplicate_codes=["HNKU6331795"],
+            invalid_entries=["BAD"],
+        ),
+    )
+
+    main_window.MainWindow._update_expected_status(window, 0, Path("expected.txt"))
+
+    value = row["expected_status_var"].get()
+    assert "\u6709\u6548 4" in value
+    assert "\u9884\u89c8 HNKU6331795, GESU5903360, MSCU1234566" in value
+
+
+def test_main_window_contains_sample_verify_and_result_entry_labels():
+    source = (Path(__file__).resolve().parents[1] / "src" / "waybill_ocr" / "ui" / "main_window.py").read_text(encoding="utf-8")
+
+    assert "\u6837\u672c\u9a8c\u6536" in source
+    assert "\\u6253\\u5f00\\u7ed3\\u679c" in source
+    assert "tk.Menubutton" in source
+    assert "\\u8bc6\\u522b\\u7ed3\\u679c.xlsx" in source
+    assert "\\u6b63\\u786e\\u8bc6\\u522b" in source
+    assert "\\u672a\\u8bc6\\u522b" in source
+    assert "\\u7bb1\\u53f7\\u9519\\u8bef" in source
+    assert "result_buttons" not in source
+    assert "\u590d\u7528\u5386\u53f2\u7ed3\u679c" in source

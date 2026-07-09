@@ -69,3 +69,11 @@ TEMU6779790
 ```
 
 `verify-samples` 默认读取 `samples/input` 和 `samples/expected/baseline.csv`，输出到 `samples/actual`。
+
+## v1.0.3 后续增强说明
+
+- 样本回归：新增 `samples/cases` 分类目录，建议按 `clear`、`blurred`、`shifted`、`invalid-check-digit`、`no-container`、`multilingual-name` 存放脱敏样本；`verify-samples` 基线支持 `expected_status` 和 `allow_review_code`。
+- 预期清单：选择清单后会展示有效箱号预览；处理完成后会生成 `缺失箱号清单.txt`，Excel 的“箱号比对”表按预期清单顺序展示“已识别 / 待确认命中 / 缺失”。
+- GUI 体验：处理完成后可直接打开输出目录、识别结果 Excel、正确识别、未识别、箱号错误目录；软件会记住最近使用路径。
+- 错误说明：常见失败原因会转成更容易理解的说明，例如校验位错误、多个候选冲突、PDF 转图失败、OCR 组件失败或结果表被占用。
+

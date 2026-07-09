@@ -8,6 +8,7 @@ from waybill_ocr.batch_processor import ProcessingProgressEvent, process_directo
 from waybill_ocr.cancellation import ProcessingCancelled
 from waybill_ocr.config import AppConfig
 from waybill_ocr.container_code.expected_codes import inspect_expected_codes
+from waybill_ocr.error_messages import humanize_failure_reason
 from waybill_ocr.models import RecognitionResult
 
 ProgressCallback = Callable[[str], None]
@@ -102,7 +103,7 @@ def _process_one_task(
         prefixed_progress("已取消")
         return []
     except Exception as exc:
-        prefixed_progress(f"任务处理失败，已跳过该任务: {exc}")
+        prefixed_progress(f"任务处理失败，已跳过该任务: {_friendly_exception(exc)}")
         return []
 
 
@@ -122,9 +123,6 @@ def _task_config(base_config: AppConfig, task_number: int) -> AppConfig:
 
 
 def _friendly_exception(exc: Exception) -> str:
-    message = str(exc)
     if isinstance(exc, PermissionError):
-        return f"\u53ef\u80fd\u6b63\u5728\u88ab Excel/WPS \u6253\u5f00\u6216\u76ee\u5f55\u65e0\u5199\u5165\u6743\u9650: {message}"
-    if "pdf" in message.lower() or "poppler" in message.lower():
-        return f"PDF \u8f6c\u56fe\u5931\u8d25\uff0c\u53ef\u80fd\u6587\u4ef6\u635f\u574f\u6216\u52a0\u5bc6: {message}"
-    return message
+        return humanize_failure_reason(f"PermissionError: {exc}")
+    return humanize_failure_reason(str(exc))

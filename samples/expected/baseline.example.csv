@@ -1,0 +1,5 @@
+filename,expected_code,expected_status,allow_review_code,quality_tag,notes
+clear/sample-clear.pdf,HNKU6331795,正确识别,false,clear,清晰样本，应直接正确识别
+blurred/sample-blurred.pdf,GESU5903360,未识别,true,blurred,模糊样本，允许输出待确认候选
+invalid-check-digit/sample-invalid.pdf,YYCU6003610,箱号错误,true,invalid-check-digit,校验位异常，可验证待确认命名
+no-container/sample-empty.pdf,,未识别,false,no-container,确认无箱号，不应误识别

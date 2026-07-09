@@ -145,3 +145,7 @@ def test_cli_batch_accepts_expected_code_list(monkeypatch, tmp_path: Path):
     assert exit_code == 0
     assert calls[0]["expected_codes"] == ["HNKU6331795"]
 
+
+
+def test_cli_verify_samples_defaults_to_cases_directory():
+    assert cli_module.DEFAULT_SAMPLE_INPUT == Path("samples/cases")

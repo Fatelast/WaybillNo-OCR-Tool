@@ -273,3 +273,24 @@ def test_process_directory_tasks_forwards_structured_progress_events():
     )
 
     assert [(task_number, event.kind) for task_number, event in events] == [(1, "scanned"), (1, "result")]
+
+
+
+def test_process_directory_tasks_uses_friendly_exception_message(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    messages = []
+
+    def fake_process_directory(*_args, **_kwargs):
+        raise PermissionError("locked")
+
+    process_directory_tasks(
+        tasks=[DirectoryTask(input_dir=input_dir, output_dir=output_dir, label="task")],
+        base_config=AppConfig(work_dir=tmp_path / "work"),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+        on_progress=messages.append,
+    )
+
+    assert any("Excel/WPS" in message for message in messages)

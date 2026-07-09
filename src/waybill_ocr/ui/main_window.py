@@ -13,14 +13,21 @@ from waybill_ocr.config import (
     default_config,
     resolve_default_work_dir,
 )
+from waybill_ocr.constants import INVALID_DIR_NAME, RESULT_WORKBOOK_NAME, SUCCESS_DIR_NAME, UNRECOGNIZED_DIR_NAME
 from waybill_ocr.container_code.expected_codes import inspect_expected_codes
 from waybill_ocr.delivery import APP_NAME, CURRENT_VERSION
 from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
 from waybill_ocr.models import RecognitionStatus
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
+from waybill_ocr.sample_verifier import verify_samples
+from waybill_ocr.ui.preferences import load_preferences, save_preferences
 from waybill_ocr.ui.task_runner import DirectoryTask, process_directory_tasks
 
 MAX_TASKS = 2
+SAMPLE_INPUT_DIR = Path("samples/cases")
+SAMPLE_FALLBACK_INPUT_DIR = Path("samples/input")
+SAMPLE_OUTPUT_DIR = Path("samples/actual")
+SAMPLE_BASELINE_PATH = Path("samples/expected/baseline.csv")
 
 BG_COLOR = "#f4f7fb"
 SURFACE_COLOR = "#ffffff"
@@ -64,9 +71,11 @@ class MainWindow:
         self.speed_description_var = tk.StringVar(value=_speed_mode_description(OCR_SPEED_BALANCED))
         self.running = False
         self.cancel_event: threading.Event | None = None
+        self.preferences = load_preferences()
 
         self._configure_style()
         self._build_layout()
+        self._restore_recent_paths()
 
     def run(self) -> None:
         self.root.mainloop()
@@ -186,23 +195,9 @@ class MainWindow:
             progressbar = ttk.Progressbar(progress_cell, mode="determinate", maximum=1, value=0, style="Horizontal.TProgressbar")
             progressbar.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(2, 0))
 
-            open_button = tk.Button(
-                task_frame,
-                text="\u6253\u5f00\u8f93\u51fa",
-                command=lambda task_index=index: self._open_output(task_index),
-                bg="#eef4ff",
-                fg=PRIMARY_COLOR,
-                activebackground="#dbeafe",
-                activeforeground=PRIMARY_HOVER,
-                disabledforeground="#ffffff",
-                relief=tk.FLAT,
-                cursor="arrow",
-                padx=10,
-                pady=4,
-                font=(FONT_FAMILY, 8, "bold"),
-                state=tk.DISABLED,
-            )
-            open_button.grid(row=0, column=2, sticky=tk.E, pady=(0, 4))
+            result_menu_button = self._build_result_menu(task_frame, index)
+            result_menu_button.grid(row=0, column=2, sticky=tk.E, pady=(0, 4))
+
 
             input_entry, input_button = self._build_path_field(
                 task_frame,
@@ -249,7 +244,7 @@ class MainWindow:
                     "progress_text_var": progress_text_var,
                     "summary_var": summary_var,
                     "progressbar": progressbar,
-                    "open_button": open_button,
+                    "result_menu_button": result_menu_button,
                     "input_entry": input_entry,
                     "output_entry": output_entry,
                     "expected_entry": expected_entry,
@@ -309,6 +304,32 @@ class MainWindow:
         button.grid(row=row, column=2, sticky=tk.E, pady=3)
         return entry, button
 
+    def _build_result_menu(self, parent: tk.Frame, task_index: int) -> tk.Menubutton:
+        button = tk.Menubutton(
+            parent,
+            text="\u6253\u5f00\u7ed3\u679c",
+            bg="#eef4ff",
+            fg=PRIMARY_COLOR,
+            activebackground="#dbeafe",
+            activeforeground=PRIMARY_HOVER,
+            disabledforeground="#ffffff",
+            relief=tk.FLAT,
+            cursor="arrow",
+            padx=10,
+            pady=4,
+            font=(FONT_FAMILY, 8, "bold"),
+            state=tk.DISABLED,
+        )
+        menu = tk.Menu(button, tearoff=False, font=(FONT_FAMILY, 8))
+        menu.add_command(label="\u8f93\u51fa\u6587\u4ef6\u5939", command=lambda: self._open_output_path(task_index, "output"))
+        menu.add_command(label="\u8bc6\u522b\u7ed3\u679c.xlsx", command=lambda: self._open_output_path(task_index, "excel"))
+        menu.add_separator()
+        menu.add_command(label="\u6b63\u786e\u8bc6\u522b", command=lambda: self._open_output_path(task_index, "success"))
+        menu.add_command(label="\u672a\u8bc6\u522b", command=lambda: self._open_output_path(task_index, "unrecognized"))
+        menu.add_command(label="\u7bb1\u53f7\u9519\u8bef", command=lambda: self._open_output_path(task_index, "invalid"))
+        button.configure(menu=menu)
+        return button
+
     def _build_actions(self, parent: tk.Frame) -> None:
         actions = tk.Frame(parent, bg=BG_COLOR)
         actions.grid(row=2, column=0, sticky=tk.EW, pady=(0, 8))
@@ -365,6 +386,21 @@ class MainWindow:
             font=(FONT_FAMILY, 8),
             anchor=tk.W,
         ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(3, 0))
+        self.sample_button = tk.Button(
+            button_box,
+            text="样本验收",
+            command=self._verify_samples,
+            bg="#eef4ff",
+            fg=PRIMARY_COLOR,
+            activebackground="#dbeafe",
+            activeforeground=PRIMARY_HOVER,
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=14,
+            pady=8,
+            font=(FONT_FAMILY, 9, "bold"),
+        )
+        self.sample_button.grid(row=0, column=1, padx=(0, 8))
         self.start_button = tk.Button(
             button_box,
             text="开始处理",
@@ -379,7 +415,7 @@ class MainWindow:
             pady=8,
             font=(FONT_FAMILY, 9, "bold"),
         )
-        self.start_button.grid(row=0, column=1, padx=(0, 8))
+        self.start_button.grid(row=0, column=2, padx=(0, 8))
         self.stop_button = tk.Button(
             button_box,
             text="停止处理",
@@ -396,7 +432,7 @@ class MainWindow:
             font=(FONT_FAMILY, 9, "bold"),
             state=tk.DISABLED,
         )
-        self.stop_button.grid(row=0, column=2)
+        self.stop_button.grid(row=0, column=3)
 
     def _build_log_section(self, parent: tk.Frame) -> None:
         panel = tk.Frame(
@@ -451,16 +487,18 @@ class MainWindow:
     def _choose_input(self, task_index: int) -> None:
         if self.running:
             return
-        path = filedialog.askdirectory()
+        path = filedialog.askdirectory(initialdir=self._recent_dir("input_dir"))
         if path:
             self.task_rows[task_index]["input_var"].set(path)
+            self._remember_path("input_dir", path)
 
     def _choose_output(self, task_index: int) -> None:
         if self.running:
             return
-        path = filedialog.askdirectory()
+        path = filedialog.askdirectory(initialdir=self._recent_dir("output_dir"))
         if path:
             self.task_rows[task_index]["output_var"].set(path)
+            self._remember_path("output_dir", path)
 
     def _choose_expected(self, task_index: int) -> None:
         if self.running:
@@ -479,7 +517,10 @@ class MainWindow:
         tasks = self._collect_tasks()
         if tasks is None:
             return
+        if not self._confirm_reusing_existing_results(tasks):
+            return
 
+        self._save_recent_task_paths(tasks)
         self._reset_task_progress(tasks)
         self.running = True
         self.cancel_event = threading.Event()
@@ -573,19 +614,21 @@ class MainWindow:
 
     def _set_running_controls(self) -> None:
         self.start_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
+        self.sample_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
         self.stop_button.config(state=tk.NORMAL, bg=DANGER_COLOR, cursor="hand2")
         self.speed_menu.config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
         for row in self.task_rows:
             row["input_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
             row["output_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
             row["expected_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
-            row["open_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
+            row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
             row["input_entry"].config(state=tk.DISABLED, disabledbackground="#eef2f7", disabledforeground=MUTED_TEXT_COLOR)
             row["output_entry"].config(state=tk.DISABLED, disabledbackground="#eef2f7", disabledforeground=MUTED_TEXT_COLOR)
             row["expected_entry"].config(state=tk.DISABLED, disabledbackground="#eef2f7", disabledforeground=MUTED_TEXT_COLOR)
 
     def _set_idle_controls(self) -> None:
         self.start_button.config(state=tk.NORMAL, bg=PRIMARY_COLOR, cursor="hand2")
+        self.sample_button.config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
         self.stop_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
         self.speed_menu.config(state=tk.NORMAL, bg=SURFACE_COLOR, fg=TEXT_COLOR, cursor="hand2")
         for row in self.task_rows:
@@ -651,9 +694,11 @@ class MainWindow:
             row["expected_status_label"].config(fg=DANGER_COLOR)
             return
 
+        preview = ", ".join(inspection.valid_codes[:3])
+        preview_text = f" | 预览 {preview}" if preview else ""
         row["expected_status_var"].set(
             f"清单校验：有效 {inspection.valid_count} | "
-            f"重复 {inspection.duplicate_count} | 无效 {inspection.invalid_count}"
+            f"重复 {inspection.duplicate_count} | 无效 {inspection.invalid_count}{preview_text}"
         )
         row["expected_status_label"].config(fg=DANGER_COLOR if inspection.invalid_count else MUTED_TEXT_COLOR)
 
@@ -678,7 +723,7 @@ class MainWindow:
             row["progress_text_var"].set("待处理" if enabled else "未启用")
             row["summary_var"].set("已处理 0/0 | 成功 0 | 未识别 0 | 箱号错误 0")
             row["progressbar"].config(maximum=1, value=0)
-            row["open_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
+            row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
 
     def _record_task_result(self, state: dict, status: RecognitionStatus) -> None:
         total = state["total"]
@@ -707,17 +752,92 @@ class MainWindow:
             if index >= len(self.task_rows):
                 continue
             if output_dir.exists():
-                self.task_rows[index]["open_button"].config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
+                self.task_rows[index]["result_menu_button"].config(
+                    state=tk.NORMAL,
+                    bg="#eef4ff",
+                    fg=PRIMARY_COLOR,
+                    cursor="hand2",
+                )
 
-    def _open_output(self, task_index: int) -> None:
+    def _open_output_path(self, task_index: int, target: str) -> None:
         if task_index >= len(self.active_output_dirs):
             return
         output_dir = self.active_output_dirs[task_index]
-        if not output_dir.exists():
-            messagebox.showerror("错误", "输出文件夹不存在")
+        targets = {
+            "output": output_dir,
+            "excel": output_dir / RESULT_WORKBOOK_NAME,
+            "success": output_dir / SUCCESS_DIR_NAME,
+            "unrecognized": output_dir / UNRECOGNIZED_DIR_NAME,
+            "invalid": output_dir / INVALID_DIR_NAME,
+        }
+        path = targets[target]
+        if not path.exists():
+            messagebox.showerror("错误", "结果路径不存在")
             return
-        os.startfile(output_dir)
+        os.startfile(path)
 
+    def _verify_samples(self) -> None:
+        if self.running:
+            return
+        input_dir = SAMPLE_INPUT_DIR if SAMPLE_INPUT_DIR.exists() else SAMPLE_FALLBACK_INPUT_DIR
+        if not input_dir.is_dir() or not SAMPLE_BASELINE_PATH.is_file():
+            messagebox.showerror("错误", "样本目录或样本基线文件不存在")
+            return
+
+        def run_verify() -> None:
+            self._append_log("开始样本验收")
+            try:
+                config = self._config_for_speed(default_config(work_dir=resolve_default_work_dir()))
+                report = verify_samples(input_dir, SAMPLE_OUTPUT_DIR, SAMPLE_BASELINE_PATH, config, TesseractEngine(config))
+                for message in report.messages:
+                    self._append_log(message)
+            except Exception as exc:
+                self._append_log(f"样本验收失败: {exc}")
+
+        threading.Thread(target=run_verify, daemon=True).start()
+
+    def _recent_dir(self, key: str) -> str | None:
+        value = self.preferences.get(key)
+        if not value:
+            return None
+        path = Path(value)
+        return str(path if path.is_dir() else path.parent)
+
+    def _remember_path(self, key: str, value: str) -> None:
+        self.preferences[key] = value
+        save_preferences(self.preferences)
+
+    def _restore_recent_paths(self) -> None:
+        if not self.task_rows:
+            return
+        first_row = self.task_rows[0]
+        if self.preferences.get("input_dir"):
+            first_row["input_var"].set(self.preferences["input_dir"])
+        if self.preferences.get("output_dir"):
+            first_row["output_var"].set(self.preferences["output_dir"])
+        if self.preferences.get("expected_path"):
+            first_row["expected_var"].set(self.preferences["expected_path"])
+
+    def _save_recent_task_paths(self, tasks: list[DirectoryTask]) -> None:
+        if not tasks:
+            return
+        first = tasks[0]
+        self.preferences["input_dir"] = str(first.input_dir)
+        self.preferences["output_dir"] = str(first.output_dir)
+        if first.expected_codes_path is not None:
+            self.preferences["expected_path"] = str(first.expected_codes_path)
+        save_preferences(self.preferences)
+
+    def _confirm_reusing_existing_results(self, tasks: list[DirectoryTask]) -> bool:
+        reused_outputs = [task.output_dir for task in tasks if (task.output_dir / RESULT_WORKBOOK_NAME).exists()]
+        if not reused_outputs:
+            return True
+        listed = "\n".join(str(path) for path in reused_outputs)
+        return messagebox.askyesno(
+            "复用历史结果",
+            "以下输出目录已有识别结果.xlsx，程序将复用历史结果并跳过已成功识别的文件。\n"
+            f"{listed}\n\n是否继续？",
+        )
 
 
 def _speed_mode_description(speed_mode: str) -> str:

@@ -5,6 +5,7 @@ from openpyxl.styles import PatternFill
 
 from waybill_ocr.constants import RESULT_WORKBOOK_NAME
 from waybill_ocr.container_code.expected_codes import ComparisonReport
+from waybill_ocr.error_messages import merge_review_note_with_failure_reason
 from waybill_ocr.models import RecognitionResult, RecognitionStatus
 
 
@@ -13,7 +14,8 @@ INTERNAL_INDEX_SHEET_NAME = "内部索引"
 INTERNAL_INDEX_HEADERS = ["原始文件名", "相对路径", "原始识别箱号", "识别来源", "失败原因", "复核候选", "识别状态"]
 ERROR_ROW_FILL = PatternFill(fill_type="solid", fgColor="FFC7CE")
 COLUMN_WIDTHS = {"A": 52, "B": 18, "C": 14, "D": 14, "E": 52}
-COMPARISON_HEADERS = ["已匹配箱号", "缺失箱号", "多余识别箱号", "格式无效"]
+COMPARISON_HEADERS = ["预期箱号", "状态", "对应文件", "多余识别箱号", "格式无效"]
+MISSING_CODES_FILENAME = "缺失箱号清单.txt"
 
 
 def write_results(
@@ -35,7 +37,7 @@ def write_results(
                 _display_container_code(result),
                 result.status.value,
                 result.elapsed_ms,
-                result.review_note or "",
+                _display_review_note(result),
             ]
         )
         if result.status is not RecognitionStatus.SUCCESS:
@@ -47,9 +49,17 @@ def write_results(
         _append_comparison_sheet(workbook, comparison_report)
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    if comparison_report is not None:
+        _write_missing_codes_file(output_dir, comparison_report.missing_codes)
     target_path = workbook_path or output_dir / RESULT_WORKBOOK_NAME
     workbook.save(target_path)
     return target_path
+
+
+def _display_review_note(result: RecognitionResult) -> str:
+    if result.status is RecognitionStatus.SUCCESS:
+        return result.review_note or ""
+    return merge_review_note_with_failure_reason(result.review_note, result.failure_reason) or ""
 
 
 def _display_container_code(result: RecognitionResult) -> str:
@@ -90,24 +100,37 @@ def _append_comparison_sheet(workbook, report: ComparisonReport) -> None:
     sheet = workbook.create_sheet("箱号比对")
     sheet.append(COMPARISON_HEADERS)
     sheet.column_dimensions["A"].width = 18
-    sheet.column_dimensions["B"].width = 18
-    sheet.column_dimensions["C"].width = 18
-    sheet.column_dimensions["D"].width = 28
+    sheet.column_dimensions["B"].width = 14
+    sheet.column_dimensions["C"].width = 32
+    sheet.column_dimensions["D"].width = 18
+    sheet.column_dimensions["E"].width = 28
     row_count = max(
-        len(report.matched_codes),
-        len(report.missing_codes),
+        len(report.expected_details),
         len(report.extra_codes),
         len(report.invalid_expected_entries),
     )
     for index in range(row_count):
+        detail = _detail_at(report.expected_details, index)
         sheet.append(
             [
-                _item_at(report.matched_codes, index),
-                _item_at(report.missing_codes, index),
+                detail.expected_code if detail else "",
+                detail.status if detail else "",
+                detail.matched_result if detail else "",
                 _item_at(report.extra_codes, index),
                 _item_at(report.invalid_expected_entries, index),
             ]
         )
+
+
+def _write_missing_codes_file(output_dir: Path, missing_codes: list[str]) -> None:
+    content = "\n".join(missing_codes) + "\n" if missing_codes else "无缺失箱号\n"
+    (output_dir / MISSING_CODES_FILENAME).write_text(content, encoding="utf-8")
+
+
+def _detail_at(items, index: int):
+    if index >= len(items):
+        return None
+    return items[index]
 
 
 def _item_at(items: list[str], index: int) -> str:

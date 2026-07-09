@@ -7,6 +7,10 @@ from openpyxl import load_workbook
 from waybill_ocr.container_code.extractor import extract_candidates
 from waybill_ocr.models import RecognitionResult, RecognitionStatus
 
+EXPECTED_STATUS_RECOGNIZED = "已识别"
+EXPECTED_STATUS_REVIEW = "待确认命中"
+EXPECTED_STATUS_MISSING = "缺失"
+
 
 @dataclass(frozen=True)
 class ExpectedCodeInspection:
@@ -28,6 +32,13 @@ class ExpectedCodeInspection:
 
 
 @dataclass(frozen=True)
+class ExpectedCodeDetail:
+    expected_code: str
+    status: str
+    matched_result: str = ""
+
+
+@dataclass(frozen=True)
 class ComparisonReport:
     expected_codes: list[str]
     recognized_codes: list[str]
@@ -35,6 +46,7 @@ class ComparisonReport:
     missing_codes: list[str]
     extra_codes: list[str]
     invalid_expected_entries: list[str] = field(default_factory=list)
+    expected_details: list[ExpectedCodeDetail] = field(default_factory=list)
 
 
 def read_expected_codes(path: Path) -> list[str]:
@@ -80,9 +92,15 @@ def compare_expected_codes(
     recognized_codes = _recognized_success_codes(results)
     recognized_set = set(recognized_codes)
     expected_set = set(normalized_expected)
+    review_hits = _review_hits_by_code(results)
+    success_hits = _success_hits_by_code(results)
+
     matched_codes = [code for code in normalized_expected if code in recognized_set]
     missing_codes = [code for code in normalized_expected if code not in recognized_set]
     extra_codes = [code for code in recognized_codes if code not in expected_set]
+    expected_details = [
+        _expected_detail(code, success_hits, review_hits) for code in normalized_expected
+    ]
     return ComparisonReport(
         expected_codes=normalized_expected,
         recognized_codes=recognized_codes,
@@ -90,7 +108,22 @@ def compare_expected_codes(
         missing_codes=missing_codes,
         extra_codes=extra_codes,
         invalid_expected_entries=invalid_expected_entries or [],
+        expected_details=expected_details,
     )
+
+
+def _expected_detail(
+    code: str,
+    success_hits: dict[str, RecognitionResult],
+    review_hits: dict[str, RecognitionResult],
+) -> ExpectedCodeDetail:
+    success_result = success_hits.get(code)
+    if success_result is not None:
+        return ExpectedCodeDetail(code, EXPECTED_STATUS_RECOGNIZED, success_result.original_name)
+    review_result = review_hits.get(code)
+    if review_result is not None:
+        return ExpectedCodeDetail(code, EXPECTED_STATUS_REVIEW, review_result.original_name)
+    return ExpectedCodeDetail(code, EXPECTED_STATUS_MISSING)
 
 
 def _read_expected_entries(path: Path) -> list[str]:
@@ -135,6 +168,22 @@ def _recognized_success_codes(results: list[RecognitionResult]) -> list[str]:
         if result.status == RecognitionStatus.SUCCESS and result.container_code and result.container_code not in codes:
             codes.append(result.container_code)
     return codes
+
+
+def _success_hits_by_code(results: list[RecognitionResult]) -> dict[str, RecognitionResult]:
+    hits: dict[str, RecognitionResult] = {}
+    for result in results:
+        if result.status == RecognitionStatus.SUCCESS and result.container_code and result.container_code not in hits:
+            hits[result.container_code] = result
+    return hits
+
+
+def _review_hits_by_code(results: list[RecognitionResult]) -> dict[str, RecognitionResult]:
+    hits: dict[str, RecognitionResult] = {}
+    for result in results:
+        if result.status != RecognitionStatus.SUCCESS and result.review_code and result.review_code not in hits:
+            hits[result.review_code] = result
+    return hits
 
 
 def _dedupe(codes: list[str]) -> list[str]:

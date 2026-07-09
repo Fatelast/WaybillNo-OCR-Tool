@@ -11,7 +11,7 @@ from waybill_ocr.ocr.tesseract_engine import TesseractEngine
 from waybill_ocr.sample_verifier import verify_samples
 
 
-DEFAULT_SAMPLE_INPUT = Path("samples/input")
+DEFAULT_SAMPLE_INPUT = Path("samples/cases")
 DEFAULT_SAMPLE_OUTPUT = Path("samples/actual")
 DEFAULT_SAMPLE_BASELINE = Path("samples/expected/baseline.csv")
 

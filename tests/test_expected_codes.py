@@ -51,3 +51,39 @@ def test_inspect_expected_codes_reports_valid_duplicates_and_invalid_entries(tmp
     assert inspection.valid_count == 2
     assert inspection.duplicate_count == 1
     assert inspection.invalid_count == 2
+
+
+
+def test_compare_expected_codes_marks_review_code_matches_without_counting_success():
+    expected_codes = ["HNKU6331795", "GESU5903360", "MSCU1234566"]
+    results = [
+        RecognitionResult(
+            source_path=Path("one.pdf"),
+            original_name="one.pdf",
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="",
+            elapsed_ms=1,
+        ),
+        RecognitionResult(
+            source_path=Path("two.pdf"),
+            original_name="two.pdf",
+            status=RecognitionStatus.UNRECOGNIZED,
+            container_code=None,
+            source=None,
+            failure_reason="NO_CONTAINER_CANDIDATE",
+            ocr_text="GESU5903360",
+            elapsed_ms=1,
+            review_code="GESU5903360",
+        ),
+    ]
+
+    report = compare_expected_codes(expected_codes, results)
+
+    assert [item.expected_code for item in report.expected_details] == expected_codes
+    assert [item.status for item in report.expected_details] == ["已识别", "待确认命中", "缺失"]
+    assert [item.matched_result for item in report.expected_details] == ["one.pdf", "two.pdf", ""]
+    assert report.matched_codes == ["HNKU6331795"]
+    assert report.missing_codes == ["GESU5903360", "MSCU1234566"]

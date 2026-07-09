@@ -129,7 +129,8 @@ def test_write_results_displays_review_code_for_non_success_result(tmp_path: Pat
     sheet = load_workbook(workbook_path).active
     assert sheet["B2"].value == "YYCU6003610"
     assert sheet["C2"].value == "箱号错误"
-    assert sheet["E2"].value == "疑似修正: YYCU6002610 -> YYCU6003610"
+    assert "YYCU6002610 -> YYCU6003610" in sheet["E2"].value
+    assert "校验位不正确" in sheet["E2"].value
 
 
 def test_write_results_sets_original_name_column_width(tmp_path: Path):
@@ -152,7 +153,7 @@ def test_write_results_sets_original_name_column_width(tmp_path: Path):
 
 
 def test_write_results_adds_comparison_sheet(tmp_path: Path):
-    from waybill_ocr.container_code.expected_codes import ComparisonReport
+    from waybill_ocr.container_code.expected_codes import compare_expected_codes
 
     source = tmp_path / "waybill.pdf"
     result = RecognitionResult(
@@ -165,12 +166,9 @@ def test_write_results_adds_comparison_sheet(tmp_path: Path):
         ocr_text="HNKU6331795",
         elapsed_ms=1,
     )
-    report = ComparisonReport(
+    report = compare_expected_codes(
         expected_codes=["HNKU6331795", "GESU5903360"],
-        recognized_codes=["HNKU6331795", "MSKU1234565"],
-        matched_codes=["HNKU6331795"],
-        missing_codes=["GESU5903360"],
-        extra_codes=["MSKU1234565"],
+        results=[result],
         invalid_expected_entries=["BAD-CODE"],
     )
 
@@ -179,13 +177,20 @@ def test_write_results_adds_comparison_sheet(tmp_path: Path):
     workbook = load_workbook(workbook_path)
     sheet = workbook["箱号比对"]
     assert [cell.value for cell in sheet[1]] == [
-        "已匹配箱号",
-        "缺失箱号",
+        "预期箱号",
+        "状态",
+        "对应文件",
         "多余识别箱号",
         "格式无效",
     ]
-    assert [cell.value for cell in sheet[2]] == ["HNKU6331795", "GESU5903360", "MSKU1234565", "BAD-CODE"]
-
+    assert [cell.value for cell in sheet[2][:5]] == [
+        "HNKU6331795",
+        "已识别",
+        "waybill.pdf",
+        None,
+        "BAD-CODE",
+    ]
+    assert [cell.value for cell in sheet[3][:3]] == ["GESU5903360", "缺失", None]
 
 def test_write_results_omits_evidence_and_diagnostic_columns_from_visible_sheet(tmp_path: Path):
     source = tmp_path / "waybill.jpg"
@@ -244,3 +249,63 @@ def test_write_results_stores_diagnostics_in_hidden_internal_index(tmp_path: Pat
         "YYCU6003610",
         "箱号错误",
     ]
+
+
+
+def test_write_results_comparison_sheet_uses_expected_order_and_status(tmp_path: Path):
+    from waybill_ocr.container_code.expected_codes import compare_expected_codes
+
+    results = [
+        RecognitionResult(
+            source_path=tmp_path / "one.pdf",
+            original_name="one.pdf",
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="",
+            elapsed_ms=1,
+        ),
+        RecognitionResult(
+            source_path=tmp_path / "two.pdf",
+            original_name="two.pdf",
+            status=RecognitionStatus.UNRECOGNIZED,
+            container_code=None,
+            source=None,
+            failure_reason="NO_CONTAINER_CANDIDATE",
+            ocr_text="GESU5903360",
+            elapsed_ms=1,
+            review_code="GESU5903360",
+        ),
+    ]
+    report = compare_expected_codes(["GESU5903360", "HNKU6331795", "MSCU1234566"], results)
+
+    workbook_path = write_results(results, tmp_path, comparison_report=report)
+
+    workbook = load_workbook(workbook_path)
+    sheet = workbook["箱号比对"]
+    assert [cell.value for cell in sheet[1]] == ["预期箱号", "状态", "对应文件", "多余识别箱号", "格式无效"]
+    assert [cell.value for cell in sheet[2][:3]] == ["GESU5903360", "待确认命中", "two.pdf"]
+    assert [cell.value for cell in sheet[3][:3]] == ["HNKU6331795", "已识别", "one.pdf"]
+    assert [cell.value for cell in sheet[4][:3]] == ["MSCU1234566", "缺失", None]
+    assert (tmp_path / "缺失箱号清单.txt").read_text(encoding="utf-8") == "GESU5903360\nMSCU1234566\n"
+
+
+def test_write_results_missing_codes_file_says_none_when_no_missing(tmp_path: Path):
+    from waybill_ocr.container_code.expected_codes import compare_expected_codes
+
+    result = RecognitionResult(
+        source_path=tmp_path / "one.pdf",
+        original_name="one.pdf",
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="",
+        elapsed_ms=1,
+    )
+    report = compare_expected_codes(["HNKU6331795"], [result])
+
+    write_results([result], tmp_path, comparison_report=report)
+
+    assert (tmp_path / "缺失箱号清单.txt").read_text(encoding="utf-8") == "无缺失箱号\n"

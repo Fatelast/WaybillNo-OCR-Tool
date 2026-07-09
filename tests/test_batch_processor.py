@@ -561,8 +561,8 @@ def test_process_directory_refreshes_comparison_sheet_when_all_files_are_skipped
     workbook = load_workbook(output_dir / "识别结果.xlsx")
     assert "箱号比对" in workbook.sheetnames
     comparison_sheet = workbook["箱号比对"]
-    assert comparison_sheet["A2"].value == "HNKU6331795"
-    assert comparison_sheet["B2"].value == "GESU5903360"
+    assert [comparison_sheet["A2"].value, comparison_sheet["B2"].value] == ["HNKU6331795", "已识别"]
+    assert [comparison_sheet["A3"].value, comparison_sheet["B3"].value] == ["GESU5903360", "缺失"]
 
 
 def test_process_directory_reprocesses_existing_unrecognized_result(tmp_path: Path, monkeypatch):
