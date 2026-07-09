@@ -523,6 +523,48 @@ def test_process_directory_skips_files_already_recorded_in_workbook(tmp_path: Pa
     assert any("first.jpg" in message and "HNKU6331795" in message for message in progress_messages)
 
 
+def test_process_directory_refreshes_comparison_sheet_when_all_files_are_skipped(tmp_path: Path, monkeypatch):
+    from waybill_ocr.output.excel_writer import write_results
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "first.jpg"
+    source_path.write_bytes(b"first")
+    existing_result = RecognitionResult(
+        source_path=source_path,
+        original_name=source_path.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="",
+        elapsed_ms=1,
+        relative_name="first.jpg",
+    )
+    write_results([existing_result], output_dir)
+
+    def fail_if_reprocessed(*_args, **_kwargs):
+        raise AssertionError("existing success result should be skipped")
+
+    monkeypatch.setattr(batch_module, "process_file", fail_if_reprocessed)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        expected_codes=["HNKU6331795", "GESU5903360"],
+    )
+
+    assert [result.container_code for result in results] == ["HNKU6331795"]
+    workbook = load_workbook(output_dir / "识别结果.xlsx")
+    assert "箱号比对" in workbook.sheetnames
+    comparison_sheet = workbook["箱号比对"]
+    assert comparison_sheet["A2"].value == "HNKU6331795"
+    assert comparison_sheet["B2"].value == "GESU5903360"
+
+
 def test_process_directory_reprocesses_existing_unrecognized_result(tmp_path: Path, monkeypatch):
     from waybill_ocr.output.excel_writer import write_results
 

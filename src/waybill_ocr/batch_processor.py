@@ -52,11 +52,13 @@ def process_directory(
     workbook_path: Path | None = None
     latest_comparison_report = None
     total = len(tasks)
+    skipped_existing_result = False
     try:
         for index, task in enumerate(tasks, start=1):
             raise_if_cancelled(cancel_event)
             existing_result = existing_results.get(task.relative_name) or existing_results.get(task.source_path.name)
             if existing_result is not None and _should_skip_existing_result(existing_result):
+                skipped_existing_result = True
                 results.append(existing_result)
                 _emit(on_progress, f"\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: {task.relative_name}")
                 _emit(on_progress, _format_result_message(existing_result))
@@ -90,6 +92,10 @@ def process_directory(
 
         if latest_comparison_report is None:
             latest_comparison_report = _comparison_report(expected_codes, results, expected_invalid_entries)
+        if skipped_existing_result and workbook_path is None and latest_comparison_report is not None and results:
+            workbook_path = _write_results(
+                results, output_dir, workbook_path, on_progress, latest_comparison_report
+            )
         _emit_comparison_report(latest_comparison_report, on_progress)
         _emit(on_progress, "\u5904\u7406\u5b8c\u6210")
         _emit_event(on_progress_event, ProcessingProgressEvent(kind="complete"))
