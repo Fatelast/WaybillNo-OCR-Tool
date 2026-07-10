@@ -14,12 +14,17 @@ from waybill_ocr.config import (
     resolve_default_work_dir,
 )
 from waybill_ocr.constants import INVALID_DIR_NAME, RESULT_WORKBOOK_NAME, SUCCESS_DIR_NAME, UNRECOGNIZED_DIR_NAME
-from waybill_ocr.container_code.expected_codes import inspect_expected_codes
+from waybill_ocr.container_code.expected_codes import inspect_expected_codes, read_expected_codes
 from waybill_ocr.delivery import APP_NAME, CURRENT_VERSION
 from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
 from waybill_ocr.models import RecognitionStatus
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
 from waybill_ocr.sample_verifier import verify_samples
+from waybill_ocr.review_confirmation import (
+    auto_confirm_expected_candidates,
+    confirm_review_candidates,
+    scan_review_candidates,
+)
 from waybill_ocr.ui.preferences import load_preferences, save_preferences
 from waybill_ocr.ui.task_runner import DirectoryTask, process_directory_tasks
 
@@ -327,6 +332,10 @@ class MainWindow:
         menu.add_command(label="\u6b63\u786e\u8bc6\u522b", command=lambda: self._open_output_path(task_index, "success"))
         menu.add_command(label="\u672a\u8bc6\u522b", command=lambda: self._open_output_path(task_index, "unrecognized"))
         menu.add_command(label="\u7bb1\u53f7\u9519\u8bef", command=lambda: self._open_output_path(task_index, "invalid"))
+        menu.add_separator()
+        menu.add_command(label="\u5f85\u786e\u8ba4\u6587\u4ef6", command=lambda: self._open_review_dialog(task_index))
+        menu.add_command(label="\u6279\u91cf\u786e\u8ba4\u5e76\u6574\u7406", command=lambda: self._open_review_dialog(task_index))
+        menu.add_command(label="\u6309\u9884\u671f\u6e05\u5355\u81ea\u52a8\u6574\u7406", command=lambda: self._auto_confirm_expected(task_index))
         button.configure(menu=menu)
         return button
 
@@ -775,6 +784,256 @@ class MainWindow:
             messagebox.showerror("错误", "结果路径不存在")
             return
         os.startfile(path)
+
+    def _open_review_dialog(self, task_index: int) -> None:
+        if self.running or task_index >= len(getattr(self, "active_output_dirs", [])):
+            return
+        output_dir = self.active_output_dirs[task_index]
+        candidates = scan_review_candidates(output_dir)
+        if not candidates:
+            messagebox.showinfo("待确认文件", "当前没有可确认的待确认文件")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("待确认文件")
+        dialog.geometry("900x460")
+        dialog.minsize(760, 360)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+
+        frame = tk.Frame(dialog, bg=SURFACE_COLOR, padx=12, pady=12)
+        frame.grid(row=0, column=0, sticky=tk.NSEW)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        tree = ttk.Treeview(
+            frame,
+            columns=("selected", "filename", "status", "code", "reason"),
+            show="headings",
+            selectmode="none",
+        )
+        headings = {
+            "selected": "确认",
+            "filename": "文件名",
+            "status": "当前目录",
+            "code": "待确认箱号",
+            "reason": "状态",
+        }
+        widths = {"selected": 56, "filename": 300, "status": 90, "code": 140, "reason": 240}
+        for column, heading in headings.items():
+            tree.heading(column, text=heading)
+            tree.column(column, width=widths[column], anchor=tk.W)
+        tree.grid(row=0, column=0, sticky=tk.NSEW)
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar.grid(row=0, column=1, sticky=tk.NS)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        candidate_by_item = {}
+        selected_items: set[str] = set()
+        for candidate in candidates:
+            item_id = tree.insert(
+                "",
+                tk.END,
+                values=(
+                    "□",
+                    candidate.source_path.name,
+                    candidate.source_status.value,
+                    candidate.review_code,
+                    "可整理" if candidate.valid else candidate.reason or "不可整理",
+                ),
+            )
+            candidate_by_item[item_id] = candidate
+
+        def toggle_item(event) -> str | None:
+            if tree.identify_region(event.x, event.y) != "cell":
+                return None
+            item_id = tree.identify_row(event.y)
+            if not item_id or tree.identify_column(event.x) != "#1":
+                return None
+            candidate = candidate_by_item[item_id]
+            if not candidate.valid:
+                return "break"
+            if item_id in selected_items:
+                selected_items.remove(item_id)
+                marker = "□"
+            else:
+                selected_items.add(item_id)
+                marker = "✓"
+            values = list(tree.item(item_id, "values"))
+            values[0] = marker
+            tree.item(item_id, values=values)
+            return "break"
+
+        def open_item(event) -> None:
+            item_id = tree.identify_row(event.y)
+            if not item_id:
+                return
+            try:
+                os.startfile(str(candidate_by_item[item_id].source_path))
+            except OSError as exc:
+                messagebox.showerror("打开失败", f"无法打开文件：{exc}", parent=dialog)
+
+        def open_location(event) -> None:
+            item_id = tree.identify_row(event.y)
+            if not item_id:
+                return
+            try:
+                os.startfile(str(candidate_by_item[item_id].source_path.parent))
+            except OSError as exc:
+                messagebox.showerror("打开失败", f"无法打开所在文件夹：{exc}", parent=dialog)
+
+        context_item_id = None
+
+        def open_context_item(open_parent: bool) -> None:
+            if context_item_id is None:
+                return
+            candidate = candidate_by_item[context_item_id]
+            path = candidate.source_path.parent if open_parent else candidate.source_path
+            try:
+                os.startfile(str(path))
+            except OSError as exc:
+                target = "所在文件夹" if open_parent else "文件"
+                messagebox.showerror("打开失败", f"无法打开{target}：{exc}", parent=dialog)
+
+        context_menu = tk.Menu(dialog, tearoff=False, font=(FONT_FAMILY, 8))
+        context_menu.add_command(label="打开文件", command=lambda: open_context_item(False))
+        context_menu.add_command(label="打开所在文件夹", command=lambda: open_context_item(True))
+
+        def show_context_menu(event) -> str:
+            nonlocal context_item_id
+            item_id = tree.identify_row(event.y)
+            if not item_id:
+                return "break"
+            context_item_id = item_id
+            context_menu.tk_popup(event.x_root, event.y_root)
+            return "break"
+
+        tree.bind("<Button-1>", toggle_item)
+        tree.bind("<Double-1>", open_item)
+        tree.bind("<Button-3>", show_context_menu)
+
+        action_bar = tk.Frame(frame, bg=SURFACE_COLOR)
+        action_bar.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
+        action_bar.columnconfigure(0, weight=1)
+        tk.Label(
+            action_bar,
+            text="双击文件可用系统默认程序查看；点击“确认”列勾选后再批量整理。",
+            bg=SURFACE_COLOR,
+            fg=MUTED_TEXT_COLOR,
+            font=(FONT_FAMILY, 8),
+        ).grid(row=0, column=0, sticky=tk.W)
+
+        def select_all() -> None:
+            for item_id, candidate in candidate_by_item.items():
+                if not candidate.valid:
+                    continue
+                selected_items.add(item_id)
+                values = list(tree.item(item_id, "values"))
+                values[0] = "✓"
+                tree.item(item_id, values=values)
+
+        def clear_all() -> None:
+            for item_id in list(selected_items):
+                values = list(tree.item(item_id, "values"))
+                values[0] = "□"
+                tree.item(item_id, values=values)
+            selected_items.clear()
+
+        def confirm_selected() -> None:
+            selected = [candidate_by_item[item_id] for item_id in selected_items]
+            if not selected:
+                messagebox.showinfo("待确认文件", "请先勾选已人工确认的文件", parent=dialog)
+                return
+            if not messagebox.askyesno(
+                "确认整理",
+                f"将整理已勾选的 {len(selected)} 个文件，并移动到“正确识别”目录。是否继续？",
+                parent=dialog,
+            ):
+                return
+            summary = confirm_review_candidates(output_dir, selected)
+            self._show_review_summary(summary, parent=dialog)
+            dialog.destroy()
+            self._enable_output_buttons()
+
+        tk.Button(
+            action_bar,
+            text="全选可整理项",
+            command=select_all,
+            bg="#eef4ff",
+            fg=PRIMARY_COLOR,
+            relief=tk.FLAT,
+            padx=10,
+            pady=5,
+            font=(FONT_FAMILY, 8),
+        ).grid(row=0, column=1, padx=(8, 4))
+        tk.Button(
+            action_bar,
+            text="取消全选",
+            command=clear_all,
+            bg="#eef4ff",
+            fg=PRIMARY_COLOR,
+            relief=tk.FLAT,
+            padx=10,
+            pady=5,
+            font=(FONT_FAMILY, 8),
+        ).grid(row=0, column=2, padx=4)
+        tk.Button(
+            action_bar,
+            text="整理已确认文件",
+            command=confirm_selected,
+            bg=PRIMARY_COLOR,
+            fg="#ffffff",
+            activebackground=PRIMARY_HOVER,
+            relief=tk.FLAT,
+            padx=12,
+            pady=5,
+            font=(FONT_FAMILY, 8, "bold"),
+        ).grid(row=0, column=3, padx=(4, 0))
+
+    def _auto_confirm_expected(self, task_index: int) -> None:
+        if self.running or task_index >= len(getattr(self, "active_output_dirs", [])):
+            return
+        expected_text = self.task_rows[task_index]["expected_var"].get().strip()
+        if not expected_text:
+            messagebox.showinfo("预期清单", "当前任务没有上传预期箱号清单，无法自动整理。请使用“批量确认并整理”。")
+            return
+        expected_path = Path(expected_text)
+        if not expected_path.is_file():
+            messagebox.showerror("预期清单", "预期箱号清单不存在")
+            return
+        output_dir = self.active_output_dirs[task_index]
+        try:
+            expected_codes = read_expected_codes(expected_path)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("预期清单", f"读取预期箱号清单失败：{exc}")
+            return
+        candidates = scan_review_candidates(output_dir)
+        expected_set = {code.strip().upper() for code in expected_codes}
+        eligible = [candidate for candidate in candidates if candidate.valid and candidate.review_code in expected_set]
+        conflicts = [candidate for candidate in candidates if candidate.review_code in expected_set and not candidate.valid]
+        remaining = len(candidates) - len(eligible)
+        if not eligible:
+            messagebox.showinfo("自动整理", "没有符合唯一预期清单匹配条件的待确认文件")
+            return
+        prompt = (
+            f"可自动整理：{len(eligible)} 个文件\n"
+            f"存在冲突：{len(conflicts)} 个文件\n"
+            f"仍需人工确认：{remaining} 个文件\n\n"
+            "是否继续整理可自动确认的文件？"
+        )
+        if not messagebox.askyesno("确认自动整理", prompt):
+            return
+        summary = auto_confirm_expected_candidates(output_dir, expected_codes)
+        self._show_review_summary(summary)
+        self._enable_output_buttons()
+
+    @staticmethod
+    def _show_review_summary(summary, parent=None) -> None:
+        message = f"已整理 {summary.moved_count} 个文件，跳过 {summary.skipped_count} 个文件，存在冲突 {summary.conflict_count} 个"
+        if summary.failures:
+            message += "\n" + "\n".join(summary.failures[:5])
+        messagebox.showinfo("整理完成", message, parent=parent)
 
     def _verify_samples(self) -> None:
         if self.running:
