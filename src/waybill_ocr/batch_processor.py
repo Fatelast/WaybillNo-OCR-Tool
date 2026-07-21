@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 from waybill_ocr.cancellation import ProcessingCancelled, raise_if_cancelled
 from waybill_ocr.config import AppConfig
 from waybill_ocr.constants import RESULT_WORKBOOK_NAME
+from waybill_ocr.container_code.duplicate_results import mark_duplicate_container_results
 from waybill_ocr.container_code.expected_codes import compare_expected_codes
 from waybill_ocr.container_code.review_candidates import apply_expected_review_code
 from waybill_ocr.file_scanner import scan_input_files
@@ -34,6 +35,7 @@ class ProcessingProgressEvent:
     kind: str
     total: int = 0
     result: RecognitionResult | None = None
+    previous_status: RecognitionStatus | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,18 @@ def process_directory(
             if existing_result is not None and _should_skip_existing_result(existing_result, output_dir):
                 skipped_existing_result = True
                 results.append(existing_result)
+                duplicate_changes = _reconcile_duplicate_results(
+                    results,
+                    output_dir,
+                    on_progress,
+                    on_progress_event,
+                    journal_path,
+                )
+                existing_result = results[-1]
+                if duplicate_changes:
+                    new_result_count += len(duplicate_changes)
+                    pending_workbook_results += len(duplicate_changes)
+                    _append_recovery_result(journal_path, existing_result, on_progress)
                 _emit(on_progress, f"\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: {task.relative_name}")
                 _emit(on_progress, _format_result_message(existing_result))
                 _emit_event(on_progress_event, ProcessingProgressEvent(kind="result", result=existing_result))
@@ -162,8 +176,16 @@ def process_directory(
                     ),
                 )
 
-            _append_recovery_result(journal_path, result, on_progress)
             results.append(result)
+            _reconcile_duplicate_results(
+                results,
+                output_dir,
+                on_progress,
+                on_progress_event,
+                journal_path,
+            )
+            result = results[-1]
+            _append_recovery_result(journal_path, result, on_progress)
             new_result_count += 1
             pending_workbook_results += 1
             _emit_event(on_progress_event, ProcessingProgressEvent(kind="result", result=result))
@@ -246,6 +268,51 @@ def _process_file_with_progress(
     raise_if_cancelled(cancel_event)
     _emit(on_progress, f"\u5904\u7406\u4e2d: {index}/{total} {task.relative_name}")
     return process_file(task, config, ocr_engine, cancel_event=cancel_event)
+
+
+def _reconcile_duplicate_results(
+    results: list[RecognitionResult],
+    output_dir: Path,
+    on_progress: ProgressCallback | None,
+    on_progress_event: ProgressEventCallback | None,
+    journal_path: Path | None,
+) -> tuple[int, ...]:
+    previous_results = list(results)
+    updated_results, changed_indices = mark_duplicate_container_results(results)
+    if not changed_indices:
+        return ()
+
+    results[:] = updated_results
+    current_index = len(results) - 1
+    for index in changed_indices:
+        previous = previous_results[index]
+        updated = results[index]
+        try:
+            copied_path = _copy_result_file(
+                updated,
+                output_dir,
+                previous.output_relative_path,
+            )
+            updated = replace(updated, output_relative_path=_output_relative_path(copied_path, output_dir))
+            results[index] = updated
+        except Exception as exc:
+            _emit(on_progress, f"\u91cd\u590d\u7bb1\u53f7\u51b2\u7a81\u6587\u4ef6\u91cd\u65b0\u5f52\u7c7b\u5931\u8d25\uff0c\u5df2\u7ee7\u7eed\u5904\u7406: {updated.original_name} ({exc})")
+
+        if index != current_index:
+            _append_recovery_result(journal_path, results[index], on_progress)
+        if previous.status is not results[index].status and index != current_index:
+            _emit_event(
+                on_progress_event,
+                ProcessingProgressEvent(
+                    kind="reclassified",
+                    result=results[index],
+                    previous_status=previous.status,
+                ),
+            )
+
+    duplicate_code = results[current_index].review_code or results[current_index].container_code
+    _emit(on_progress, f"\u68c0\u6d4b\u5230\u91cd\u590d\u7bb1\u53f7 {duplicate_code}\uff0c\u76f8\u5173\u6587\u4ef6\u5df2\u8f6c\u5165\u7bb1\u53f7\u9519\u8bef\u76ee\u5f55\u5f85\u786e\u8ba4")
+    return changed_indices
 
 
 def _should_skip_existing_result(result: RecognitionResult, output_dir: Path) -> bool:
@@ -375,6 +442,29 @@ def _write_results(
         except PermissionError as fallback_exc:
             _emit(on_progress, f"\u7ed3\u679c\u8868\u5199\u5165\u5931\u8d25\uff0c\u5df2\u7ee7\u7eed\u5904\u7406: {fallback_exc}")
             return WorkbookWriteOutcome(path=None, written=False)
+
+
+def count_retryable_results(output_dir: Path) -> int:
+    workbook_path = output_dir / RESULT_WORKBOOK_NAME
+    if not workbook_path.is_file():
+        return 0
+
+    workbook = load_workbook(workbook_path, read_only=True, data_only=True)
+    try:
+        sheet = workbook[INTERNAL_INDEX_SHEET_NAME] if INTERNAL_INDEX_SHEET_NAME in workbook.sheetnames else workbook.active
+        rows = sheet.iter_rows(values_only=True)
+        headers = {name: index for index, name in enumerate(next(rows, [])) if name}
+        status_index = headers.get("\u8bc6\u522b\u72b6\u6001")
+        if status_index is None:
+            return 0
+        retryable_statuses = {RecognitionStatus.UNRECOGNIZED.value, RecognitionStatus.INVALID.value}
+        return sum(
+            1
+            for row in rows
+            if status_index < len(row) and str(row[status_index]) in retryable_statuses
+        )
+    finally:
+        workbook.close()
 
 
 def _load_existing_results(

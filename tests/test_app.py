@@ -163,7 +163,8 @@ def test_speed_mode_descriptions_are_user_scenario_based():
 def test_main_window_uses_structured_progress_events_for_task_state():
     source = (Path(__file__).resolve().parents[1] / "src" / "waybill_ocr" / "ui" / "main_window.py").read_text(encoding="utf-8")
 
-    assert "on_progress_event=self._handle_task_progress_event" in source
+    assert "on_progress_event=progress_handler" in source
+    assert "progress_handler = self._handle_task_progress_event" in source
     assert "_update_task_progress_from_message" not in source
     assert "re.match" not in source
 

@@ -32,6 +32,7 @@ from waybill_ocr.ocr.base import OcrEngine
 
 STRONG_CANDIDATE_SCORE = 140
 CONFLICTING_CANDIDATES_REASON = "CONFLICTING_CANDIDATES"
+INSUFFICIENT_CANDIDATE_EVIDENCE_REASON = "INSUFFICIENT_CANDIDATE_EVIDENCE"
 REGION_CROP_FAILURE_MARKER = "\u533a\u57df\u88c1\u526a\u5931\u8d25"
 REGION_CROP_SKIP_MARKER = "\u533a\u57df\u88c1\u526a\u8df3\u8fc7"
 REGION_CROP_FAILURE_NOTE = "\u533a\u57df\u88c1\u526a\u5931\u8d25/\u8df3\u8fc7\uff0c\u53ef\u80fd\u56fe\u7247\u635f\u574f\u6216\u65e0\u6cd5\u8bfb\u53d6\u533a\u57df"
@@ -54,7 +55,11 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
             full_region = OcrRegion(image_path=image_path, region_name="full")
             combined_text = _recognize_region(ocr_engine, full_region, candidate_texts, combined_text, cancel_event)
             full_selection = select_best_candidate_with_score(candidate_texts)
-            if full_selection and full_selection.score >= STRONG_CANDIDATE_SCORE:
+            if (
+                full_selection
+                and full_selection.score >= STRONG_CANDIDATE_SCORE
+                and not _needs_pdf_cross_validation(task, config, full_selection, candidate_texts)
+            ):
                 result, combined_text = _resolve_valid_selection(
                     task=task,
                     config=config,
@@ -75,6 +80,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                 candidate_texts=candidate_texts,
                 combined_text=combined_text,
                 cancel_event=cancel_event,
+                stop_on_confirmed_candidate=True,
             )
             selection = select_best_candidate_with_score(candidate_texts)
             if selection:
@@ -99,6 +105,7 @@ def process_file(task: FileTask, config: AppConfig, ocr_engine: OcrEngine, cance
                     candidate_texts=candidate_texts,
                     combined_text=combined_text,
                     cancel_event=cancel_event,
+                    stop_on_confirmed_candidate=True,
                 )
                 selection = select_best_candidate_with_score(candidate_texts)
                 if selection:
@@ -246,7 +253,9 @@ def _resolve_valid_selection(
     started: float,
     cancel_event,
 ) -> tuple[RecognitionResult | None, str]:
-    if not has_candidate_conflict(selection.code, combined_text):
+    has_conflict = has_candidate_conflict(selection.code, combined_text)
+    needs_cross_validation = _needs_pdf_cross_validation(task, config, selection, candidate_texts)
+    if not has_conflict and not needs_cross_validation:
         return _build_success_result(task, selection, combined_text, started), combined_text
 
     if _should_run_enhancement(config):
@@ -257,6 +266,7 @@ def _resolve_valid_selection(
             image_path=image_path,
             combined_text=combined_text,
             cancel_event=cancel_event,
+            confirmation_code=selection.code,
         )
         if enhanced_selection:
             if enhanced_selection.code == selection.code:
@@ -266,11 +276,12 @@ def _resolve_valid_selection(
                 selection=enhanced_selection,
                 ocr_text=combined_text,
                 started=started,
-                review_note=f"\u589e\u5f3a\u8bc6\u522b\u8986\u76d6\u4f4e\u6e05\u6670\u5ea6\u5019\u9009: {selection.code} -> {enhanced_selection.code}",
+                review_note=f"增强识别覆盖低清晰度候选: {selection.code} -> {enhanced_selection.code}",
             ), combined_text
 
+    if needs_cross_validation and not has_conflict:
+        return _build_insufficient_evidence_result(task, selection.code, combined_text, started), combined_text
     return _build_conflict_result(task, selection.code, combined_text, started), combined_text
-
 
 def _build_conflict_result(task: FileTask, code: str, ocr_text: str, started: float) -> RecognitionResult:
     review_note = build_conflict_review_note(code, ocr_text)
@@ -287,6 +298,19 @@ def _build_conflict_result(task: FileTask, code: str, ocr_text: str, started: fl
     )
 
 
+
+def _build_insufficient_evidence_result(task: FileTask, code: str, ocr_text: str, started: float) -> RecognitionResult:
+    return _build_result(
+        task=task,
+        status=RecognitionStatus.INVALID,
+        container_code=code,
+        source=RecognitionSource.OCR,
+        failure_reason=INSUFFICIENT_CANDIDATE_EVIDENCE_REASON,
+        ocr_text=ocr_text,
+        started=started,
+        review_note=f"合法候选仅有单处 OCR 证据，未通过增强交叉验证: {code}",
+        review_code=code,
+    )
 
 def _is_confirmed_invalid_repair(
     invalid_candidate: str,
@@ -365,15 +389,27 @@ def _recognize_enhanced_selection(
     image_path,
     combined_text: str,
     cancel_event,
+    confirmation_code: str | None = None,
 ) -> tuple[CandidateSelection | None, str]:
     if not _should_run_enhancement(config):
         return None, combined_text
 
     enhanced_texts: list[CandidateText] = []
     region_iterator = iter(iter_enhanced_ocr_regions(task, image_path, config))
+    resolved_region_keys: set[tuple[str, str]] = set()
     try:
         for region in region_iterator:
-            for psm in _enhanced_psm_values(config):
+            region_key = _enhanced_evidence_key(region.region_name)
+            if (
+                config.ocr_speed_mode == OCR_SPEED_BALANCED
+                and _is_secondary_enhanced_variant(region.region_name)
+                and region_key in resolved_region_keys
+            ):
+                continue
+
+            known_codes = _valid_codes(enhanced_texts)
+            region_code_hits: dict[str, int] = {}
+            for psm_index, psm in enumerate(_enhanced_psm_values(config)):
                 raise_if_cancelled(cancel_event)
                 combined_text = _recognize_region(
                     ocr_engine=ocr_engine,
@@ -383,17 +419,45 @@ def _recognize_enhanced_selection(
                     cancel_event=cancel_event,
                     psm=psm,
                 )
+                current_codes = set(extract_candidates(enhanced_texts[-1].text))
+                for code in current_codes:
+                    region_code_hits[code] = region_code_hits.get(code, 0) + 1
+                if (
+                    config.ocr_speed_mode == OCR_SPEED_BALANCED
+                    and current_codes
+                    and (psm_index > 0 or bool(current_codes & known_codes))
+                ):
+                    break
+
+            confirmed_region_codes = {
+                code
+                for code, hit_count in region_code_hits.items()
+                if hit_count >= 2 or code in known_codes
+            }
+            if len(confirmed_region_codes) == 1:
+                resolved_region_keys.add(region_key)
             if config.ocr_speed_mode == OCR_SPEED_BALANCED:
                 staged_selection = _confirmed_staged_enhanced_selection(
                     enhanced_texts,
                     require_cross_resolution=task.source_path.suffix.lower() == ".pdf",
                 )
-                if staged_selection is not None:
+                if staged_selection is not None and _is_confirmed_enhanced_override(
+                    confirmation_code,
+                    staged_selection,
+                    enhanced_texts,
+                ):
                     return staged_selection, combined_text
-        return select_best_candidate_with_score(enhanced_texts), combined_text
+
+        selection = select_best_candidate_with_score(enhanced_texts)
+        if selection is not None and not _is_confirmed_enhanced_override(
+            confirmation_code,
+            selection,
+            enhanced_texts,
+        ):
+            selection = None
+        return selection, combined_text
     finally:
         _close_iterator(region_iterator)
-
 
 def _confirmed_staged_enhanced_selection(
     texts: list[CandidateText],
@@ -417,7 +481,7 @@ def _confirmed_staged_enhanced_selection(
     combined_stage_text = "\n".join(item.text for item in texts)
     if valid_codes != {selection.code} or has_candidate_conflict(selection.code, combined_stage_text):
         return None
-    if len(evidence_regions) < 3:
+    if len(evidence_regions) < 2:
         return None
     if require_cross_resolution and not {"400dpi", "base"}.issubset(evidence_sources):
         return None
@@ -425,10 +489,15 @@ def _confirmed_staged_enhanced_selection(
 
 
 def _enhanced_evidence_region(region_name: str) -> str:
-    for suffix in ("-plain", "-x2sharp"):
-        if region_name.endswith(suffix):
-            return region_name[: -len(suffix)]
-    return region_name
+    normalized = region_name.removeprefix("enhanced-")
+    for source in ("400dpi-", "base-"):
+        if normalized.startswith(source):
+            normalized = normalized[len(source) :]
+            break
+    for suffix in ("-plain", "-x2sharp", "-x2binary"):
+        if normalized.endswith(suffix):
+            return normalized[: -len(suffix)]
+    return normalized
 
 
 def _enhanced_evidence_source(region_name: str) -> str:
@@ -438,6 +507,64 @@ def _enhanced_evidence_source(region_name: str) -> str:
         return "base"
     return "other"
 
+
+def _enhanced_evidence_key(region_name: str) -> tuple[str, str]:
+    return _enhanced_evidence_source(region_name), _enhanced_evidence_region(region_name)
+
+
+def _is_secondary_enhanced_variant(region_name: str) -> bool:
+    return region_name.endswith(("-x2sharp", "-x2binary"))
+
+
+def _valid_codes(texts: list[CandidateText]) -> set[str]:
+    return {code for item in texts for code in extract_candidates(item.text)}
+
+
+def _enhanced_variant(region_name: str) -> str:
+    for variant in ("plain", "x2sharp", "x2binary"):
+        if region_name.endswith(f"-{variant}"):
+            return variant
+    return "other"
+
+
+def _candidate_supports(texts: list[CandidateText]) -> dict[str, set[tuple[str, str, str]]]:
+    supports: dict[str, set[tuple[str, str, str]]] = {}
+    for item in texts:
+        support_key = (
+            _enhanced_evidence_source(item.region_name),
+            _enhanced_evidence_region(item.region_name),
+            _enhanced_variant(item.region_name),
+        )
+        for code in set(extract_candidates(item.text)):
+            supports.setdefault(code, set()).add(support_key)
+    return supports
+
+
+def _is_confirmed_enhanced_override(
+    confirmation_code: str | None,
+    selection: CandidateSelection,
+    texts: list[CandidateText],
+) -> bool:
+    if confirmation_code is None:
+        return True
+
+    supports = _candidate_supports(texts)
+    selected_supports = supports.get(selection.code, set())
+    other_support_count = max(
+        (len(items) for code, items in supports.items() if code != selection.code),
+        default=0,
+    )
+    if selection.code == confirmation_code:
+        return bool(selected_supports) and len(selected_supports) > other_support_count
+
+    selected_regions = {region for _source, region, _variant in selected_supports}
+    high_dpi_variants: dict[str, set[str]] = {}
+    for source, region, variant in selected_supports:
+        if source == "400dpi":
+            high_dpi_variants.setdefault(region, set()).add(variant)
+    has_high_dpi_transform_confirmation = any(len(variants) >= 2 for variants in high_dpi_variants.values())
+    has_independent_confirmation = len(selected_regions) >= 2 or has_high_dpi_transform_confirmation
+    return has_independent_confirmation and len(selected_supports) > other_support_count
 
 def _priority_regions_for_mode(image_path, config: AppConfig):
     try:
@@ -457,22 +584,45 @@ def _should_run_enhancement(config: AppConfig) -> bool:
     return config.ocr_speed_mode != OCR_SPEED_FAST
 
 
+def _needs_pdf_cross_validation(
+    task: FileTask,
+    config: AppConfig,
+    selection: CandidateSelection,
+    candidate_texts: list[CandidateText],
+) -> bool:
+    if config.ocr_speed_mode == OCR_SPEED_FAST or task.source_path.suffix.lower() != ".pdf":
+        return False
+    return selection.is_repaired or len(_base_candidate_evidence_regions(selection.code, candidate_texts)) < 2
+
+
+def _base_candidate_evidence_regions(code: str, texts: list[CandidateText]) -> set[str]:
+    return {item.region_name for item in texts if code in set(extract_candidates(item.text))}
+
+
+def _has_confirmed_base_candidate(texts: list[CandidateText], combined_text: str) -> bool:
+    selection = select_best_candidate_with_score(texts)
+    if selection is None or selection.is_repaired or has_candidate_conflict(selection.code, combined_text):
+        return False
+    return len(_base_candidate_evidence_regions(selection.code, texts)) >= 2
+
 def _recognize_regions(
     ocr_engine: OcrEngine,
     regions,
     candidate_texts: list[CandidateText],
     combined_text: str,
     cancel_event,
+    stop_on_confirmed_candidate: bool = False,
 ) -> str:
     region_iterator = iter(regions)
     try:
         for region in region_iterator:
             raise_if_cancelled(cancel_event)
             combined_text = _recognize_region(ocr_engine, region, candidate_texts, combined_text, cancel_event)
+            if stop_on_confirmed_candidate and _has_confirmed_base_candidate(candidate_texts, combined_text):
+                break
         return combined_text
     finally:
         _close_iterator(region_iterator)
-
 
 def _recognize_region(
     ocr_engine: OcrEngine,

@@ -582,7 +582,7 @@ def test_process_directory_keeps_processing_when_workbook_write_fails(tmp_path: 
             source_path=task.source_path,
             original_name=task.source_path.name,
             status=RecognitionStatus.SUCCESS,
-            container_code="HNKU6331795",
+            container_code=("HNKU6331795" if task.source_path.name == "first.jpg" else "GESU5903360"),
             source=RecognitionSource.OCR,
             failure_reason=None,
             ocr_text="HNKU6331795",

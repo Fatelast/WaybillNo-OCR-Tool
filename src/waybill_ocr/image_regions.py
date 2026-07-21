@@ -61,9 +61,54 @@ def _iter_enhanced_regions(task, image_path: Path, config: AppConfig) -> Iterato
                             image_path=sharpened_path,
                             region_name=f"enhanced-{source_name}-{region_name}-x2sharp",
                         )
+
+                        if _should_add_binary_variant(task, config, source_name):
+                            threshold = _otsu_threshold(sharpened)
+                            binary = sharpened.point(lambda value: 255 if value > threshold else 0, mode="1")
+                            binary_path = temp_dir / f"enhanced-{source_name}-{region_name}-x2binary.png"
+                            binary.save(binary_path)
+                            yield OcrRegion(
+                                image_path=binary_path,
+                                region_name=f"enhanced-{source_name}-{region_name}-x2binary",
+                            )
     except Exception as exc:
         yield OcrRegion(image_path=image_path, region_name=f"\u533a\u57df\u88c1\u526a\u5931\u8d25: {exc}")
 
+
+def _should_add_binary_variant(task, config: AppConfig, source_name: str) -> bool:
+    if config.ocr_speed_mode == OCR_SPEED_STABLE:
+        return True
+    if task.source_path.suffix.lower() != ".pdf":
+        return True
+    return source_name == "400dpi"
+
+
+def _otsu_threshold(image) -> int:
+    histogram = image.histogram()[:256]
+    total = sum(histogram)
+    if total == 0:
+        return 127
+
+    weighted_total = sum(index * count for index, count in enumerate(histogram))
+    background_weight = 0
+    background_sum = 0
+    best_threshold = 127
+    best_variance = -1.0
+    for threshold, count in enumerate(histogram):
+        background_weight += count
+        if background_weight == 0:
+            continue
+        foreground_weight = total - background_weight
+        if foreground_weight == 0:
+            break
+        background_sum += threshold * count
+        background_mean = background_sum / background_weight
+        foreground_mean = (weighted_total - background_sum) / foreground_weight
+        variance = background_weight * foreground_weight * (background_mean - foreground_mean) ** 2
+        if variance > best_variance:
+            best_variance = variance
+            best_threshold = threshold
+    return best_threshold
 
 def _enhanced_regions(
     width: int,

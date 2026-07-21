@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from waybill_ocr.batch_processor import ProcessingProgressEvent
+from waybill_ocr.batch_processor import ProcessingProgressEvent, count_retryable_results
 from waybill_ocr.config import (
     OCR_SPEED_BALANCED,
     OCR_SPEED_FAST,
@@ -77,6 +77,9 @@ class MainWindow:
         self.running = False
         self.cancel_event: threading.Event | None = None
         self.preferences = load_preferences()
+        self.active_tasks: list[DirectoryTask] = []
+        self.active_output_dirs: list[Path] = []
+        self.task_progress_states: list[dict] = []
 
         self._configure_style()
         self._build_layout()
@@ -336,6 +339,8 @@ class MainWindow:
         menu.add_command(label="\u5f85\u786e\u8ba4\u6587\u4ef6", command=lambda: self._open_review_dialog(task_index))
         menu.add_command(label="\u6279\u91cf\u786e\u8ba4\u5e76\u6574\u7406", command=lambda: self._open_review_dialog(task_index))
         menu.add_command(label="\u6309\u9884\u671f\u6e05\u5355\u81ea\u52a8\u6574\u7406", command=lambda: self._auto_confirm_expected(task_index))
+        menu.add_separator()
+        menu.add_command(label="\u5931\u8d25\u6587\u4ef6\u91cd\u65b0\u8bc6\u522b", command=lambda: self._retry_failed_files(task_index))
         button.configure(menu=menu)
         return button
 
@@ -596,18 +601,60 @@ class MainWindow:
         self.stop_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
         self._append_log("正在停止...")
 
-    def _process(self, tasks: list[DirectoryTask], cancel_event: threading.Event) -> None:
+    def _retry_failed_files(self, task_index: int) -> None:
+        if self.running or task_index >= len(self.active_tasks):
+            return
+
+        task = self.active_tasks[task_index]
+        try:
+            failed_count = count_retryable_results(task.output_dir)
+        except Exception as exc:
+            messagebox.showerror("\u91cd\u65b0\u8bc6\u522b\u5931\u8d25\u6587\u4ef6", f"\u8bfb\u53d6\u5386\u53f2\u7ed3\u679c\u5931\u8d25\uff1a{exc}")
+            return
+        if failed_count == 0:
+            messagebox.showinfo("\u91cd\u65b0\u8bc6\u522b\u5931\u8d25\u6587\u4ef6", "\u5f53\u524d\u4efb\u52a1\u6ca1\u6709\u672a\u8bc6\u522b\u6216\u7bb1\u53f7\u9519\u8bef\u6587\u4ef6")
+            return
+        if not messagebox.askyesno(
+            "\u91cd\u65b0\u8bc6\u522b\u5931\u8d25\u6587\u4ef6",
+            f"\u5c06\u91cd\u65b0\u8bc6\u522b {failed_count} \u4e2a\u5931\u8d25\u6587\u4ef6\uff0c\u5df2\u6b63\u786e\u8bc6\u522b\u7684\u6587\u4ef6\u4f1a\u81ea\u52a8\u8df3\u8fc7\u3002\u662f\u5426\u7ee7\u7eed\uff1f",
+        ):
+            return
+
+        self._reset_single_task_progress(task_index)
+        self.running = True
+        self.cancel_event = threading.Event()
+        self._set_running_controls()
+        self._append_log(f"[{task.label}] \u5f00\u59cb\u91cd\u65b0\u8bc6\u522b {failed_count} \u4e2a\u5931\u8d25\u6587\u4ef6")
+        thread = threading.Thread(
+            target=self._process,
+            args=([task], self.cancel_event, {1: task_index + 1}),
+            daemon=True,
+        )
+        thread.start()
+
+
+    def _process(
+        self,
+        tasks: list[DirectoryTask],
+        cancel_event: threading.Event,
+        task_number_map: dict[int, int] | None = None,
+    ) -> None:
         try:
             config = self._config_for_speed(default_config(work_dir=resolve_default_work_dir()))
             for message in format_diagnostic_messages(inspect_environment(config)):
                 self._append_log(message)
+            progress_handler = self._handle_task_progress_event
+            if task_number_map:
+                progress_handler = lambda task_number, event: self._handle_task_progress_event(
+                    task_number_map.get(task_number, task_number), event
+                )
             process_directory_tasks(
                 tasks=tasks,
                 base_config=config,
                 engine_factory=TesseractEngine,
                 on_progress=self._append_log,
                 cancel_event=cancel_event,
-                on_progress_event=self._handle_task_progress_event,
+                on_progress_event=progress_handler,
                 max_workers=self._max_workers_for_speed(),
             )
         except Exception as exc:
@@ -669,6 +716,12 @@ class MainWindow:
             state["total"] = event.total
         elif event.kind == "result" and event.result is not None:
             self._record_task_result(state, event.result.status)
+        elif (
+            event.kind == "reclassified"
+            and event.result is not None
+            and event.previous_status is not None
+        ):
+            self._replace_task_result_status(state, event.previous_status, event.result.status)
         elif event.kind not in {"complete", "cancelled"}:
             return
 
@@ -723,6 +776,7 @@ class MainWindow:
         return True
 
     def _reset_task_progress(self, tasks: list[DirectoryTask]) -> None:
+        self.active_tasks = list(tasks)
         self.task_progress_states = []
         self.active_output_dirs = [task.output_dir for task in tasks]
         for index, row in enumerate(self.task_rows):
@@ -734,6 +788,15 @@ class MainWindow:
             row["progressbar"].config(maximum=1, value=0)
             row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
 
+    def _reset_single_task_progress(self, task_index: int) -> None:
+        state = {"total": 0, "processed": 0, "success": 0, "unrecognized": 0, "invalid": 0}
+        self.task_progress_states[task_index] = state
+        row = self.task_rows[task_index]
+        row["progress_text_var"].set("\u5f85\u5904\u7406")
+        row["summary_var"].set("\u5df2\u5904\u7406 0/0 | \u6210\u529f 0 | \u672a\u8bc6\u522b 0 | \u7bb1\u53f7\u9519\u8bef 0")
+        row["progressbar"].config(maximum=1, value=0)
+
+
     def _record_task_result(self, state: dict, status: RecognitionStatus) -> None:
         total = state["total"]
         state["processed"] = min(state["processed"] + 1, total) if total else state["processed"] + 1
@@ -743,6 +806,21 @@ class MainWindow:
             state["invalid"] += 1
         elif status == RecognitionStatus.UNRECOGNIZED:
             state["unrecognized"] += 1
+
+    @staticmethod
+    def _replace_task_result_status(
+        state: dict,
+        previous_status: RecognitionStatus,
+        current_status: RecognitionStatus,
+    ) -> None:
+        counter_keys = {
+            RecognitionStatus.SUCCESS: "success",
+            RecognitionStatus.UNRECOGNIZED: "unrecognized",
+            RecognitionStatus.INVALID: "invalid",
+        }
+        previous_key = counter_keys[previous_status]
+        state[previous_key] = max(0, state[previous_key] - 1)
+        state[counter_keys[current_status]] += 1
 
     def _render_task_progress(self, task_index: int) -> None:
         row = self.task_rows[task_index]

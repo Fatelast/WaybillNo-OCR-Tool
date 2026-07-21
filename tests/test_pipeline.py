@@ -464,6 +464,8 @@ def test_process_file_uses_enhanced_candidate_when_base_valid_candidate_conflict
     priority_path.write_bytes(b"fake")
     enhanced_path = tmp_path / "enhanced-full-middle.png"
     enhanced_path.write_bytes(b"fake")
+    enhanced_left_path = tmp_path / "enhanced-left-middle.png"
+    enhanced_left_path.write_bytes(b"fake")
     task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
 
     monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
@@ -474,7 +476,10 @@ def test_process_file_uses_enhanced_candidate_when_base_valid_candidate_conflict
     monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
     monkeypatch.setattr(
         "waybill_ocr.pipeline.iter_enhanced_ocr_regions",
-        lambda task, image_path, config: [OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle")],
+        lambda task, image_path, config: [
+            OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle"),
+            OcrRegion(image_path=enhanced_left_path, region_name="enhanced-left-middle"),
+        ],
         raising=False,
     )
 
@@ -486,6 +491,7 @@ def test_process_file_uses_enhanced_candidate_when_base_valid_candidate_conflict
                 "waybill.jpg": "noise TEMUGTT9790 45G1",
                 "priority-left-middle.png": "TEMU77979045G132500",
                 "enhanced-full-middle.png": "TEMU677979045G132500",
+                "enhanced-left-middle.png": "TEMU677979045G132500",
             }
         ),
     )
@@ -527,6 +533,8 @@ def test_process_file_uses_enhanced_candidate_when_base_candidate_has_invalid_ch
     source_path.write_bytes(b"fake")
     enhanced_path = tmp_path / "enhanced-full-middle.png"
     enhanced_path.write_bytes(b"fake")
+    enhanced_left_path = tmp_path / "enhanced-left-middle.png"
+    enhanced_left_path.write_bytes(b"fake")
     task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
 
     monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
@@ -534,7 +542,10 @@ def test_process_file_uses_enhanced_candidate_when_base_candidate_has_invalid_ch
     monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
     monkeypatch.setattr(
         "waybill_ocr.pipeline.iter_enhanced_ocr_regions",
-        lambda task, image_path, config: [OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle")],
+        lambda task, image_path, config: [
+            OcrRegion(image_path=enhanced_path, region_name="enhanced-full-middle"),
+            OcrRegion(image_path=enhanced_left_path, region_name="enhanced-left-middle"),
+        ],
         raising=False,
     )
 
@@ -771,9 +782,9 @@ def test_balanced_pdf_enhanced_ocr_stops_after_cross_resolution_confirmation(tmp
     assert result.status == RecognitionStatus.SUCCESS
     assert result.container_code == "GESU5903360"
     assert calls.count("full-middle.png") == 2
-    assert calls.count("left-middle.png") == 2
-    assert calls.count("left-lower-middle.png") == 2
-    assert calls.count("fallback.png") == 2
+    assert calls.count("left-middle.png") == 1
+    assert calls.count("left-lower-middle.png") == 1
+    assert calls.count("fallback.png") == 1
 
 
 def test_balanced_pdf_enhanced_ocr_does_not_stop_before_base_resolution_conflict(tmp_path: Path, monkeypatch):
@@ -813,7 +824,7 @@ def test_balanced_pdf_enhanced_ocr_does_not_stop_before_base_resolution_conflict
     process_file(task, AppConfig(ocr_speed_mode="balanced"), ConflictingResolutionOcrEngine())
 
     assert calls.count("base-confirm.png") == 2
-    assert calls.count("base-fallback.png") == 2
+    assert calls.count("base-fallback.png") == 1
 
 
 def test_balanced_enhanced_ocr_keeps_full_fallback_on_candidate_conflict(tmp_path: Path, monkeypatch):
@@ -849,7 +860,7 @@ def test_balanced_enhanced_ocr_keeps_full_fallback_on_candidate_conflict(tmp_pat
 
     process_file(task, AppConfig(ocr_speed_mode="balanced"), ConflictingOcrEngine())
 
-    assert calls.count("fallback.png") == 2
+    assert calls.count("fallback.png") == 1
 
 
 def test_stable_enhanced_ocr_never_uses_staged_early_stop(tmp_path: Path, monkeypatch):
