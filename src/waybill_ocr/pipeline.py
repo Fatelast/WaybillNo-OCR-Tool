@@ -356,6 +356,8 @@ def _enhanced_psm_values(config: AppConfig) -> tuple[int, ...]:
     if config.ocr_speed_mode == OCR_SPEED_STABLE:
         return (6, 7, 11)
     return (6, 11)
+
+
 def _recognize_enhanced_selection(
     task: FileTask,
     config: AppConfig,
@@ -381,9 +383,60 @@ def _recognize_enhanced_selection(
                     cancel_event=cancel_event,
                     psm=psm,
                 )
+            if config.ocr_speed_mode == OCR_SPEED_BALANCED:
+                staged_selection = _confirmed_staged_enhanced_selection(
+                    enhanced_texts,
+                    require_cross_resolution=task.source_path.suffix.lower() == ".pdf",
+                )
+                if staged_selection is not None:
+                    return staged_selection, combined_text
         return select_best_candidate_with_score(enhanced_texts), combined_text
     finally:
         _close_iterator(region_iterator)
+
+
+def _confirmed_staged_enhanced_selection(
+    texts: list[CandidateText],
+    *,
+    require_cross_resolution: bool,
+) -> CandidateSelection | None:
+    selection = select_best_candidate_with_score(texts)
+    if selection is None or selection.is_repaired:
+        return None
+
+    valid_codes: set[str] = set()
+    evidence_regions: set[str] = set()
+    evidence_sources: set[str] = set()
+    for item in texts:
+        item_codes = set(extract_candidates(item.text))
+        valid_codes.update(item_codes)
+        if selection.code in item_codes:
+            evidence_regions.add(_enhanced_evidence_region(item.region_name))
+            evidence_sources.add(_enhanced_evidence_source(item.region_name))
+
+    combined_stage_text = "\n".join(item.text for item in texts)
+    if valid_codes != {selection.code} or has_candidate_conflict(selection.code, combined_stage_text):
+        return None
+    if len(evidence_regions) < 3:
+        return None
+    if require_cross_resolution and not {"400dpi", "base"}.issubset(evidence_sources):
+        return None
+    return selection
+
+
+def _enhanced_evidence_region(region_name: str) -> str:
+    for suffix in ("-plain", "-x2sharp"):
+        if region_name.endswith(suffix):
+            return region_name[: -len(suffix)]
+    return region_name
+
+
+def _enhanced_evidence_source(region_name: str) -> str:
+    if region_name.startswith("enhanced-400dpi-"):
+        return "400dpi"
+    if region_name.startswith("enhanced-base-"):
+        return "base"
+    return "other"
 
 
 def _priority_regions_for_mode(image_path, config: AppConfig):

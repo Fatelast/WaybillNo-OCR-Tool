@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -9,6 +10,165 @@ from waybill_ocr.models import FileTask, RecognitionResult, RecognitionSource, R
 
 class FakeOcrEngine:
     pass
+
+
+def test_process_directory_can_recognize_two_files_concurrently(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    first_path = input_dir / "first.jpg"
+    second_path = input_dir / "second.jpg"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    barrier = threading.Barrier(2)
+    progress_messages: list[str] = []
+    codes = {
+        "first.jpg": "HNKU6331795",
+        "second.jpg": "GESU5903360",
+    }
+
+    def fake_process_file(
+        task: FileTask,
+        _config: AppConfig,
+        _ocr_engine: FakeOcrEngine,
+        cancel_event=None,
+    ) -> RecognitionResult:
+        barrier.wait(timeout=5)
+        code = codes[task.source_path.name]
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code=code,
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text=code,
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        on_progress=progress_messages.append,
+        max_file_workers=2,
+    )
+
+    assert [result.original_name for result in results] == ["first.jpg", "second.jpg"]
+    first_result_index = next(
+        index for index, message in enumerate(progress_messages) if message.startswith("结果:")
+    )
+    started_before_result = [
+        message for message in progress_messages[:first_result_index] if message.startswith("处理中:")
+    ]
+    assert any("并行识别已启用" in message for message in progress_messages)
+    assert len(started_before_result) == 2
+    assert (output_dir / "正确识别" / "HNKU6331795.jpg").read_bytes() == b"first"
+    assert (output_dir / "正确识别" / "GESU5903360.jpg").read_bytes() == b"second"
+
+
+def test_process_directory_writes_workbook_in_five_result_batches(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    for index in range(12):
+        (input_dir / f"{index:02}.jpg").write_bytes(b"fake")
+    written_result_counts: list[int] = []
+    progress_messages: list[str] = []
+
+    def fake_process_file(
+        task: FileTask,
+        _config: AppConfig,
+        _ocr_engine: FakeOcrEngine,
+        cancel_event=None,
+    ) -> RecognitionResult:
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    def fake_write_results(
+        results,
+        output_dir: Path,
+        workbook_path: Path | None = None,
+        comparison_report=None,
+    ) -> Path:
+        written_result_counts.append(len(results))
+        return workbook_path or output_dir / "识别结果.xlsx"
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+    monkeypatch.setattr(batch_module, "copy_result_file", lambda *_args: None)
+    monkeypatch.setattr(batch_module, "write_results", fake_write_results)
+
+    batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        on_progress=progress_messages.append,
+    )
+
+    assert written_result_counts == [5, 10, 12]
+    assert any("每 5 个新结果" in message for message in progress_messages)
+
+
+def test_process_directory_retries_final_workbook_after_batch_write_failure(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    for index in range(10):
+        (input_dir / f"{index:02}.jpg").write_bytes(b"fake")
+    written_result_counts: list[int] = []
+
+    def fake_process_file(
+        task: FileTask,
+        _config: AppConfig,
+        _ocr_engine: FakeOcrEngine,
+        cancel_event=None,
+    ) -> RecognitionResult:
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    def fake_write_results(
+        results,
+        output_dir: Path,
+        workbook_path: Path | None = None,
+        comparison_report=None,
+    ) -> Path:
+        written_result_counts.append(len(results))
+        if written_result_counts == [5, 10]:
+            raise PermissionError("workbook locked")
+        return workbook_path or output_dir / "识别结果.xlsx"
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+    monkeypatch.setattr(batch_module, "copy_result_file", lambda *_args: None)
+    monkeypatch.setattr(batch_module, "write_results", fake_write_results)
+
+    batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    assert written_result_counts == [5, 10, 10]
 
 
 def test_process_directory_classifies_files_and_writes_workbook(tmp_path: Path, monkeypatch):
@@ -52,6 +212,7 @@ def test_process_directory_classifies_files_and_writes_workbook(tmp_path: Path, 
     assert workbook.active["B2"].value == "HNKU6331795"
     assert progress_messages == [
         "扫描到 1 个文件",
+        "结果表分批写入：每 5 个新结果更新一次，任务结束或取消时保存剩余结果",
         "处理中: 1/1 waybill.jpg",
         "结果: waybill.jpg -> 正确识别 (HNKU6331795)",
         "处理完成",
@@ -233,6 +394,7 @@ def test_process_directory_stops_between_files_when_cancelled(tmp_path: Path, mo
     assert [result.original_name for result in results] == ["first.jpg"]
     assert processed == ["first.jpg"]
     assert any(message == "已取消：已处理 1/2" for message in progress_messages)
+    assert (output_dir / "识别结果.xlsx" ).exists()
 
 
 
@@ -459,7 +621,7 @@ def test_process_directory_reuses_latest_comparison_report_for_final_log(tmp_pat
         expected_codes=["HNKU6331795", "GESU5903360"],
     )
 
-    assert comparison_calls == [1, 2]
+    assert comparison_calls == [2]
 
 
 def test_process_directory_skips_files_already_recorded_in_workbook(tmp_path: Path, monkeypatch):

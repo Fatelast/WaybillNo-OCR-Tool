@@ -736,3 +736,148 @@ def test_enhanced_ocr_uses_multiple_psm_in_stable_mode(tmp_path: Path, monkeypat
     assert 6 in calls
     assert 7 in calls
     assert 11 in calls
+
+
+def test_balanced_pdf_enhanced_ocr_stops_after_cross_resolution_confirmation(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.pdf"
+    source_path.write_bytes(b"fake")
+    region_paths = []
+    for name in ("full-middle", "left-middle", "left-lower-middle", "fallback"):
+        region_path = tmp_path / f"{name}.png"
+        region_path.write_bytes(b"fake")
+        region_paths.append(region_path)
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".pdf")
+    calls: list[str] = []
+
+    class RecordingOcrEngine:
+        def recognize_image(self, image_path, cancel_event=None, *, psm=None):
+            calls.append(image_path.name)
+            text = "no code" if image_path == source_path else "GESU5903360 45G1"
+            return OcrResult(text=text, engine_name="fake", elapsed_ms=1)
+
+    regions = [
+        OcrRegion(image_path=region_paths[0], region_name="enhanced-400dpi-full-middle-plain"),
+        OcrRegion(image_path=region_paths[1], region_name="enhanced-400dpi-left-middle-plain"),
+        OcrRegion(image_path=region_paths[2], region_name="enhanced-400dpi-left-lower-middle-plain"),
+        OcrRegion(image_path=region_paths[3], region_name="enhanced-base-full-middle-plain"),
+    ]
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_enhanced_ocr_regions", lambda *_args: regions)
+
+    result = process_file(task, AppConfig(ocr_speed_mode="balanced"), RecordingOcrEngine())
+
+    assert result.status == RecognitionStatus.SUCCESS
+    assert result.container_code == "GESU5903360"
+    assert calls.count("full-middle.png") == 2
+    assert calls.count("left-middle.png") == 2
+    assert calls.count("left-lower-middle.png") == 2
+    assert calls.count("fallback.png") == 2
+
+
+def test_balanced_pdf_enhanced_ocr_does_not_stop_before_base_resolution_conflict(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.pdf"
+    source_path.write_bytes(b"fake")
+    region_paths = []
+    for name in ("high-first", "high-second", "high-third", "base-confirm", "base-fallback"):
+        region_path = tmp_path / f"{name}.png"
+        region_path.write_bytes(b"fake")
+        region_paths.append(region_path)
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".pdf")
+    calls: list[str] = []
+
+    class ConflictingResolutionOcrEngine:
+        def recognize_image(self, image_path, cancel_event=None, *, psm=None):
+            calls.append(image_path.name)
+            if image_path.name.startswith("high-"):
+                text = "TEMU7797904 45G1"
+            elif image_path.name.startswith("base-"):
+                text = "TEMU6779790 45G1"
+            else:
+                text = "no code"
+            return OcrResult(text=text, engine_name="fake", elapsed_ms=1)
+
+    regions = [
+        OcrRegion(image_path=region_paths[0], region_name="enhanced-400dpi-full-middle-plain"),
+        OcrRegion(image_path=region_paths[1], region_name="enhanced-400dpi-left-middle-plain"),
+        OcrRegion(image_path=region_paths[2], region_name="enhanced-400dpi-left-lower-middle-plain"),
+        OcrRegion(image_path=region_paths[3], region_name="enhanced-base-full-middle-plain"),
+        OcrRegion(image_path=region_paths[4], region_name="enhanced-base-left-middle-plain"),
+    ]
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_enhanced_ocr_regions", lambda *_args: regions)
+
+    process_file(task, AppConfig(ocr_speed_mode="balanced"), ConflictingResolutionOcrEngine())
+
+    assert calls.count("base-confirm.png") == 2
+    assert calls.count("base-fallback.png") == 2
+
+
+def test_balanced_enhanced_ocr_keeps_full_fallback_on_candidate_conflict(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    region_paths = []
+    for name in ("first", "second", "third", "fallback"):
+        region_path = tmp_path / f"{name}.png"
+        region_path.write_bytes(b"fake")
+        region_paths.append(region_path)
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+    calls: list[str] = []
+
+    class ConflictingOcrEngine:
+        def recognize_image(self, image_path, cancel_event=None, *, psm=None):
+            calls.append(image_path.name)
+            texts = {
+                "first.png": "GESU5903360 45G1",
+                "second.png": "HNKU6331795 45G1",
+                "third.png": "GESU5903360 45G1",
+                "fallback.png": "GESU5903360 45G1",
+            }
+            return OcrResult(text=texts.get(image_path.name, "no code"), engine_name="fake", elapsed_ms=1)
+
+    regions = [
+        OcrRegion(image_path=path, region_name=f"enhanced-400dpi-{path.stem}-plain")
+        for path in region_paths
+    ]
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_enhanced_ocr_regions", lambda *_args: regions)
+
+    process_file(task, AppConfig(ocr_speed_mode="balanced"), ConflictingOcrEngine())
+
+    assert calls.count("fallback.png") == 2
+
+
+def test_stable_enhanced_ocr_never_uses_staged_early_stop(tmp_path: Path, monkeypatch):
+    source_path = tmp_path / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    region_paths = []
+    for name in ("first", "second", "third", "fallback"):
+        region_path = tmp_path / f"{name}.png"
+        region_path.write_bytes(b"fake")
+        region_paths.append(region_path)
+    task = FileTask(source_path=source_path, relative_name=source_path.name, suffix=".jpg")
+    calls: list[str] = []
+
+    class RecordingOcrEngine:
+        def recognize_image(self, image_path, cancel_event=None, *, psm=None):
+            calls.append(image_path.name)
+            text = "no code" if image_path == source_path else "GESU5903360 45G1"
+            return OcrResult(text=text, engine_name="fake", elapsed_ms=1)
+
+    regions = [
+        OcrRegion(image_path=path, region_name=f"enhanced-400dpi-{path.stem}-plain")
+        for path in region_paths
+    ]
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_images_for_ocr", lambda *_args: [source_path])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_priority_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_grid_ocr_regions", lambda *_args: [])
+    monkeypatch.setattr("waybill_ocr.pipeline.iter_enhanced_ocr_regions", lambda *_args: regions)
+
+    process_file(task, AppConfig(ocr_speed_mode="stable"), RecordingOcrEngine())
+
+    assert calls.count("fallback.png") == 3

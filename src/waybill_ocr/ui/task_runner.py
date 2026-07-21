@@ -39,6 +39,7 @@ def process_directory_tasks(
         return []
 
     worker_count = min(max_workers, len(tasks))
+    file_worker_count = 2 if len(tasks) == 1 and max_workers >= 2 else 1
     results: list[RecognitionResult] = []
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = [
@@ -51,6 +52,7 @@ def process_directory_tasks(
                 on_progress,
                 cancel_event,
                 on_progress_event,
+                file_worker_count,
                 process_directory_func,
             )
             for task_number, task in enumerate(tasks, start=1)
@@ -69,6 +71,7 @@ def _process_one_task(
     on_progress: ProgressCallback | None,
     cancel_event,
     on_progress_event: TaskProgressCallback | None,
+    max_file_workers: int,
     process_directory_func: ProcessDirectoryFunc,
 ) -> list[RecognitionResult]:
     config = _task_config(base_config, task_number)
@@ -89,6 +92,8 @@ def _process_one_task(
         kwargs["expected_invalid_entries"] = expected_inspection.invalid_entries
     if _accepts_keyword(process_directory_func, "on_progress_event"):
         kwargs["on_progress_event"] = prefixed_progress_event
+    if _accepts_keyword(process_directory_func, "max_file_workers"):
+        kwargs["max_file_workers"] = max_file_workers
 
     try:
         return process_directory_func(

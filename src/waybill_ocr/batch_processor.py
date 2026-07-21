@@ -1,5 +1,6 @@
 import shutil
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -29,7 +30,14 @@ class ProcessingProgressEvent:
     result: RecognitionResult | None = None
 
 
+@dataclass(frozen=True)
+class WorkbookWriteOutcome:
+    path: Path | None
+    written: bool
+
+
 ProgressEventCallback = Callable[[ProcessingProgressEvent], None]
+RESULT_WRITE_BATCH_SIZE = 5
 
 
 def process_directory(
@@ -42,17 +50,57 @@ def process_directory(
     expected_codes: list[str] | None = None,
     expected_invalid_entries: list[str] | None = None,
     on_progress_event: ProgressEventCallback | None = None,
+    max_file_workers: int = 1,
 ) -> list[RecognitionResult]:
     tasks = _exclude_output_tasks(scan_input_files(input_dir), output_dir)
     existing_results = _load_existing_results(tasks, output_dir, on_progress)
     _emit(on_progress, f"\u626b\u63cf\u5230 {len(tasks)} \u4e2a\u6587\u4ef6")
+    if tasks:
+        _emit(
+            on_progress,
+            f"\u7ed3\u679c\u8868\u5206\u6279\u5199\u5165\uff1a\u6bcf {RESULT_WRITE_BATCH_SIZE} \u4e2a\u65b0\u7ed3\u679c\u66f4\u65b0\u4e00\u6b21\uff0c"
+            "\u4efb\u52a1\u7ed3\u675f\u6216\u53d6\u6d88\u65f6\u4fdd\u5b58\u5269\u4f59\u7ed3\u679c",
+        )
     _emit_event(on_progress_event, ProcessingProgressEvent(kind="scanned", total=len(tasks)))
 
     results: list[RecognitionResult] = []
     workbook_path: Path | None = None
     latest_comparison_report = None
+    # Classification stays immediate; workbook rebuilds are amortized in small batches.
+    pending_workbook_results = 0
+    new_result_count = 0
+    last_written_result_count = 0
     total = len(tasks)
     skipped_existing_result = False
+    worker_limit = max(1, min(max_file_workers, 2))
+    pending_tasks: list[tuple[int, FileTask]] = []
+    for index, task in enumerate(tasks, start=1):
+        existing_result = existing_results.get(task.relative_name) or existing_results.get(task.source_path.name)
+        if existing_result is None or not _should_skip_existing_result(existing_result):
+            pending_tasks.append((index, task))
+    recognition_executor = None
+    recognition_futures = {}
+    if worker_limit > 1 and len(pending_tasks) > 1:
+        recognition_executor = ThreadPoolExecutor(max_workers=worker_limit)
+        _emit(
+            on_progress,
+            f"\u5e76\u884c\u8bc6\u522b\u5df2\u542f\u7528\uff1a\u540c\u65f6\u5904\u7406 {worker_limit} \u4e2a\u6587\u4ef6\uff0c"
+            "\u7ed3\u679c\u4ecd\u6309\u626b\u63cf\u987a\u5e8f\u6c47\u603b",
+        )
+        recognition_futures = {
+            task.relative_name: recognition_executor.submit(
+                _process_file_with_progress,
+                task,
+                index,
+                total,
+                config,
+                ocr_engine,
+                on_progress,
+                cancel_event,
+            )
+            for index, task in pending_tasks
+        }
+
     try:
         for index, task in enumerate(tasks, start=1):
             raise_if_cancelled(cancel_event)
@@ -66,10 +114,16 @@ def process_directory(
                 continue
 
             started_at = perf_counter()
-            _emit(on_progress, f"\u5904\u7406\u4e2d: {index}/{total} {task.relative_name}")
+            future = recognition_futures.get(task.relative_name)
+            if future is None:
+                _emit(on_progress, f"\u5904\u7406\u4e2d: {index}/{total} {task.relative_name}")
 
             try:
-                result = process_file(task, config, ocr_engine, cancel_event=cancel_event)
+                result = (
+                    future.result()
+                    if future is not None
+                    else process_file(task, config, ocr_engine, cancel_event=cancel_event)
+                )
                 if result.relative_name is None:
                     result = replace(result, relative_name=task.relative_name)
                 result = apply_expected_review_code(result, expected_codes)
@@ -83,19 +137,48 @@ def process_directory(
                 _copy_failed_result(result, output_dir, on_progress)
 
             results.append(result)
+            new_result_count += 1
+            pending_workbook_results += 1
             _emit_event(on_progress_event, ProcessingProgressEvent(kind="result", result=result))
-            latest_comparison_report = _comparison_report(expected_codes, results, expected_invalid_entries)
-            workbook_path = _write_results(
-                results, output_dir, workbook_path, on_progress, latest_comparison_report
-            )
+            if pending_workbook_results >= RESULT_WRITE_BATCH_SIZE:
+                latest_comparison_report = _comparison_report(
+                    expected_codes,
+                    results,
+                    expected_invalid_entries,
+                )
+                write_outcome = _write_results(
+                    results,
+                    output_dir,
+                    workbook_path,
+                    on_progress,
+                    latest_comparison_report,
+                )
+                workbook_path = write_outcome.path
+                if write_outcome.written:
+                    last_written_result_count = len(results)
+                pending_workbook_results = 0
             _emit(on_progress, _format_result_message(result))
 
-        if latest_comparison_report is None:
+        if latest_comparison_report is None or last_written_result_count != len(results):
             latest_comparison_report = _comparison_report(expected_codes, results, expected_invalid_entries)
-        if skipped_existing_result and workbook_path is None and latest_comparison_report is not None and results:
-            workbook_path = _write_results(
-                results, output_dir, workbook_path, on_progress, latest_comparison_report
+        should_write_final_results = bool(results) and (
+            pending_workbook_results > 0
+            or (new_result_count > 0 and last_written_result_count != len(results))
+            or (
+                skipped_existing_result
+                and workbook_path is None
+                and latest_comparison_report is not None
             )
+        )
+        if should_write_final_results:
+            write_outcome = _write_results(
+                results,
+                output_dir,
+                workbook_path,
+                on_progress,
+                latest_comparison_report,
+            )
+            workbook_path = write_outcome.path
         _emit_comparison_report(latest_comparison_report, on_progress)
         _emit(on_progress, "\u5904\u7406\u5b8c\u6210")
         _emit_event(on_progress_event, ProcessingProgressEvent(kind="complete"))
@@ -113,7 +196,25 @@ def process_directory(
         _emit_event(on_progress_event, ProcessingProgressEvent(kind="cancelled"))
         return results
     finally:
+        if recognition_executor is not None:
+            for future in recognition_futures.values():
+                future.cancel()
+            recognition_executor.shutdown(wait=True, cancel_futures=True)
         _cleanup_work_dir(config)
+
+
+def _process_file_with_progress(
+    task: FileTask,
+    index: int,
+    total: int,
+    config: AppConfig,
+    ocr_engine: OcrEngine,
+    on_progress: ProgressCallback | None,
+    cancel_event,
+) -> RecognitionResult:
+    raise_if_cancelled(cancel_event)
+    _emit(on_progress, f"\u5904\u7406\u4e2d: {index}/{total} {task.relative_name}")
+    return process_file(task, config, ocr_engine, cancel_event=cancel_event)
 
 
 def _should_skip_existing_result(result: RecognitionResult) -> bool:
@@ -148,31 +249,33 @@ def _write_results(
     workbook_path: Path | None,
     on_progress: ProgressCallback | None,
     comparison_report=None,
-) -> Path | None:
+) -> WorkbookWriteOutcome:
     try:
-        return write_results(
+        written_path = write_results(
             results,
             output_dir,
             workbook_path=workbook_path,
             comparison_report=comparison_report,
         )
+        return WorkbookWriteOutcome(path=written_path, written=True)
     except PermissionError as exc:
         if workbook_path is not None:
             _emit(on_progress, f"\u7ed3\u679c\u8868\u5199\u5165\u5931\u8d25\uff0c\u5df2\u7ee7\u7eed\u5904\u7406: {exc}")
-            return workbook_path
+            return WorkbookWriteOutcome(path=workbook_path, written=False)
 
         fallback_path = _backup_workbook_path(output_dir)
         _emit(on_progress, f"{RESULT_WORKBOOK_NAME} \u88ab\u5360\u7528\uff0c\u5df2\u6539\u5199\u5907\u7528\u7ed3\u679c\u8868: {fallback_path.name}")
         try:
-            return write_results(
+            written_path = write_results(
                 results,
                 output_dir,
                 workbook_path=fallback_path,
                 comparison_report=comparison_report,
             )
+            return WorkbookWriteOutcome(path=written_path, written=True)
         except PermissionError as fallback_exc:
             _emit(on_progress, f"\u7ed3\u679c\u8868\u5199\u5165\u5931\u8d25\uff0c\u5df2\u7ee7\u7eed\u5904\u7406: {fallback_exc}")
-            return None
+            return WorkbookWriteOutcome(path=None, written=False)
 
 
 def _load_existing_results(

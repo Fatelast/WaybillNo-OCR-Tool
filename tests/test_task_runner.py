@@ -231,6 +231,51 @@ def test_process_directory_tasks_stable_worker_limit_runs_one_group_at_a_time(tm
 
     assert max_running == 1
 
+
+def test_process_directory_tasks_assigns_file_workers_with_global_limit(tmp_path: Path):
+    input_one = tmp_path / "input-one"
+    input_two = tmp_path / "input-two"
+    output_one = tmp_path / "output-one"
+    output_two = tmp_path / "output-two"
+    input_one.mkdir()
+    input_two.mkdir()
+    received: list[tuple[Path, int]] = []
+
+    def fake_process_directory(
+        input_dir,
+        output_dir,
+        config,
+        ocr_engine,
+        on_progress,
+        cancel_event=None,
+        max_file_workers=1,
+    ):
+        received.append((input_dir, max_file_workers))
+        return []
+
+    process_directory_tasks(
+        tasks=[DirectoryTask(input_dir=input_one, output_dir=output_one, label="task 1/1")],
+        base_config=AppConfig(work_dir=tmp_path / "work-one"),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+        max_workers=2,
+    )
+    assert received == [(input_one, 2)]
+
+    received.clear()
+    process_directory_tasks(
+        tasks=[
+            DirectoryTask(input_dir=input_one, output_dir=output_one, label="task 1/2"),
+            DirectoryTask(input_dir=input_two, output_dir=output_two, label="task 2/2"),
+        ],
+        base_config=AppConfig(work_dir=tmp_path / "work-two"),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+        max_workers=2,
+    )
+    assert set(received) == {(input_one, 1), (input_two, 1)}
+
+
 def test_process_directory_tasks_forwards_structured_progress_events():
     input_dir = Path("input")
     output_dir = Path("output")
