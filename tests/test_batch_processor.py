@@ -171,6 +171,69 @@ def test_process_directory_retries_final_workbook_after_batch_write_failure(tmp_
     assert written_result_counts == [5, 10, 10]
 
 
+def test_process_directory_recovers_success_before_excel_flush(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    state_dir = tmp_path / "state"
+    input_dir.mkdir()
+    source_path = input_dir / "waybill.jpg"
+    source_path.write_bytes(b"fake")
+    process_calls: list[str] = []
+
+    def fake_process_file(
+        task: FileTask,
+        _config: AppConfig,
+        _ocr_engine: FakeOcrEngine,
+        cancel_event=None,
+    ) -> RecognitionResult:
+        process_calls.append(task.relative_name)
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="HNKU6331795",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="HNKU6331795",
+            elapsed_ms=1,
+        )
+
+    real_write_results = batch_module.write_results
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+    monkeypatch.setattr(
+        batch_module,
+        "write_results",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")),
+    )
+
+    batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(state_dir=state_dir),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    assert process_calls == ["waybill.jpg"]
+    assert list(state_dir.glob("*.jsonl"))
+    monkeypatch.setattr(batch_module, "write_results", real_write_results)
+    monkeypatch.setattr(
+        batch_module,
+        "process_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("recovered success must be skipped")),
+    )
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(state_dir=state_dir),
+        ocr_engine=FakeOcrEngine(),
+    )
+
+    assert [result.container_code for result in results] == ["HNKU6331795"]
+    assert (output_dir / "识别结果.xlsx").exists()
+    assert not list(state_dir.glob("*.jsonl"))
+    assert not (output_dir / "正确识别" / "HNKU6331795-1.jpg").exists()
+
 def test_process_directory_classifies_files_and_writes_workbook(tmp_path: Path, monkeypatch):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"

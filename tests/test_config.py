@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from waybill_ocr.config import default_config, resolve_default_work_dir, resolve_runtime_base_dir
+from waybill_ocr.config import (
+    default_config,
+    resolve_default_state_dir,
+    resolve_default_work_dir,
+    resolve_runtime_base_dir,
+)
 
 
 def test_default_config_discovers_tools_from_base_dir(tmp_path: Path):
@@ -56,6 +61,11 @@ def test_resolve_default_work_dir_allows_environment_override(tmp_path: Path):
 
     assert work_dir == custom_work_dir
 
+
+def test_resolve_default_state_dir_uses_local_app_data():
+    state_dir = resolve_default_state_dir(env={"LOCALAPPDATA": "C:/Users/Test/AppData/Local"})
+
+    assert state_dir == Path("C:/Users/Test/AppData/Local") / "OCRTool" / "state"
 
 def test_default_config_defaults_to_zero_ocr_retries(tmp_path: Path):
     config = default_config(base_dir=tmp_path, env={})

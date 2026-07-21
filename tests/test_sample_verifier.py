@@ -2,7 +2,7 @@ from pathlib import Path
 
 import waybill_ocr.sample_verifier as verifier_module
 from waybill_ocr.models import RecognitionResult, RecognitionSource, RecognitionStatus
-from waybill_ocr.sample_verifier import verify_samples
+from waybill_ocr.sample_verifier import resolve_default_baseline_path, verify_samples
 
 
 class FakeOcrEngine:
@@ -30,6 +30,25 @@ def _result(
         relative_name=relative_name,
     )
 
+
+def test_default_sample_baseline_prefers_local_private_baseline(tmp_path: Path):
+    expected_dir = tmp_path / "expected"
+    expected_dir.mkdir()
+    tracked = expected_dir / "baseline.csv"
+    local = expected_dir / "baseline.local.csv"
+    tracked.write_text("tracked", encoding="utf-8")
+    local.write_text("local", encoding="utf-8")
+
+    assert resolve_default_baseline_path(expected_dir) == local
+
+
+def test_default_sample_baseline_falls_back_to_tracked_baseline(tmp_path: Path):
+    expected_dir = tmp_path / "expected"
+    expected_dir.mkdir()
+    tracked = expected_dir / "baseline.csv"
+    tracked.write_text("tracked", encoding="utf-8")
+
+    assert resolve_default_baseline_path(expected_dir) == tracked
 
 def test_verify_samples_passes_when_results_match_baseline(tmp_path: Path, monkeypatch):
     input_dir = tmp_path / "input"

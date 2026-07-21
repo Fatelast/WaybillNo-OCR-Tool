@@ -127,3 +127,67 @@ def test_copy_result_file_keeps_existing_file_when_names_collide(tmp_path: Path)
     assert second_copy.name == "HNKU6331795-1.jpg"
     assert first_copy.read_bytes() == b"first"
     assert second_copy.read_bytes() == b"second"
+
+
+def test_copy_result_file_reuses_previous_output_without_numbered_duplicate(tmp_path: Path):
+    source = tmp_path / "waybill.jpg"
+    source.write_bytes(b"first")
+    output_dir = tmp_path / "output"
+    result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        status=RecognitionStatus.UNRECOGNIZED,
+        container_code=None,
+        source=None,
+        failure_reason="NO_CONTAINER_CANDIDATE",
+        ocr_text="",
+        elapsed_ms=10,
+    )
+    first_copy = copy_result_file(result, output_dir)
+    source.write_bytes(b"updated")
+
+    second_copy = copy_result_file(
+        result,
+        output_dir,
+        previous_output_relative_path=first_copy.relative_to(output_dir).as_posix(),
+    )
+
+    assert second_copy == first_copy
+    assert second_copy.read_bytes() == b"updated"
+    assert not (output_dir / "未识别" / "waybill-1.jpg").exists()
+
+
+def test_copy_result_file_moves_previous_classification_after_reprocessing(tmp_path: Path):
+    source = tmp_path / "waybill.pdf"
+    source.write_bytes(b"fake")
+    output_dir = tmp_path / "output"
+    old_result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        status=RecognitionStatus.UNRECOGNIZED,
+        container_code=None,
+        source=None,
+        failure_reason="NO_CONTAINER_CANDIDATE",
+        ocr_text="",
+        elapsed_ms=10,
+    )
+    old_copy = copy_result_file(old_result, output_dir)
+    success_result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="HNKU6331795",
+        elapsed_ms=10,
+    )
+
+    new_copy = copy_result_file(
+        success_result,
+        output_dir,
+        previous_output_relative_path=old_copy.relative_to(output_dir).as_posix(),
+    )
+
+    assert new_copy == output_dir / "正确识别" / "HNKU6331795.pdf"
+    assert not old_copy.exists()

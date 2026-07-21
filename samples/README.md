@@ -28,6 +28,10 @@ filename,expected_code,expected_status,allow_review_code,quality_tag,notes
 .\.venv\Scripts\python.exe -m waybill_ocr verify-samples --input samples/cases
 ```
 
+## 本地真实样本
+
+真实业务 PDF 和 `expected/baseline.local.csv` 已由 `.gitignore` 排除，不会随代码提交。当前本机基线包含 3 个已知样本；执行验收时会优先读取该本地基线。新增真实样本时应使用泛化文件名，并同步添加对应期望记录。
+
 ## 兼容的旧样本目录
 
 旧版 `samples/input` 仍保留以下分类，已有样本可以继续放在这些目录中：

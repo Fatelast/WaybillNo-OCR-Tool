@@ -25,6 +25,13 @@ class BaselineExpectation:
     notes: str = ""
 
 
+def resolve_default_baseline_path(expected_dir: Path = Path("samples/expected")) -> Path:
+    local_path = expected_dir / "baseline.local.csv"
+    if local_path.is_file():
+        return local_path
+    return expected_dir / "baseline.csv"
+
+
 def verify_samples(
     input_dir: Path,
     output_dir: Path,

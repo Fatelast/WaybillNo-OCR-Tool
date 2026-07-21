@@ -68,11 +68,12 @@ TEMU6779790
 .\.venv\Scripts\python.exe -m waybill_ocr verify-samples
 ```
 
-`verify-samples` 默认读取 `samples/input` 和 `samples/expected/baseline.csv`，输出到 `samples/actual`。
+`verify-samples` 默认读取 `samples/cases`，优先使用仅存于本机的 `samples/expected/baseline.local.csv`，不存在时回退到仓库内的 `baseline.csv`，输出到 `samples/actual`。
 
 ## v1.0.3 后续增强说明
 
-- 样本回归：新增 `samples/cases` 分类目录，建议按 `clear`、`blurred`、`shifted`、`invalid-check-digit`、`no-container`、`multilingual-name` 存放脱敏样本；`verify-samples` 基线支持 `expected_status` 和 `allow_review_code`。
+- 样本回归：`samples/cases` 按清晰、模糊、错位、校验位错误、无箱号和多语言文件名分类；真实样本及 `baseline.local.csv` 仅保存在本机，当前本地基线包含 3 个已验证业务样本。`verify-samples` 支持状态和待确认候选验收。
+- 重复运行与恢复：同一输入文件重新处理时替换其上次输出，不再持续生成 `-1`、`-2` 副本；处理结果先写恢复日志，异常退出后可在下次启动补写 Excel。
 - 预期清单：选择清单后会展示有效箱号预览；处理完成后会生成 `缺失箱号清单.txt`，Excel 的“箱号比对”表按预期清单顺序展示“已识别 / 待确认命中 / 缺失”。
 - GUI 体验：处理完成后可直接打开输出目录、识别结果 Excel、正确识别、未识别、箱号错误目录；软件会记住最近使用路径。
 - 待确认整理：结果菜单支持查看待确认文件；双击使用系统默认程序打开，人工勾选后批量移动到正确识别目录；有预期清单时可自动整理唯一匹配且无冲突的候选。

@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+from uuid import uuid4
 
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
@@ -11,7 +13,7 @@ from waybill_ocr.models import RecognitionResult, RecognitionStatus
 
 HEADERS = ["原始文件名", "识别箱号", "识别状态", "处理耗时ms", "备注"]
 INTERNAL_INDEX_SHEET_NAME = "内部索引"
-INTERNAL_INDEX_HEADERS = ["原始文件名", "相对路径", "原始识别箱号", "识别来源", "失败原因", "复核候选", "识别状态"]
+INTERNAL_INDEX_HEADERS = ["原始文件名", "相对路径", "原始识别箱号", "识别来源", "失败原因", "复核候选", "识别状态", "输出相对路径"]
 ERROR_ROW_FILL = PatternFill(fill_type="solid", fgColor="FFC7CE")
 COLUMN_WIDTHS = {"A": 52, "B": 18, "C": 14, "D": 14, "E": 52}
 COMPARISON_HEADERS = ["预期箱号", "状态", "对应文件", "多余识别箱号", "格式无效"]
@@ -52,8 +54,20 @@ def write_results(
     if comparison_report is not None:
         _write_missing_codes_file(output_dir, comparison_report.missing_codes)
     target_path = workbook_path or output_dir / RESULT_WORKBOOK_NAME
-    workbook.save(target_path)
+    _save_workbook_atomically(workbook, target_path)
     return target_path
+
+
+def _save_workbook_atomically(workbook: Workbook, target_path: Path) -> None:
+    temporary_path = target_path.with_name(f".{target_path.stem}.{uuid4().hex}.tmp{target_path.suffix}")
+    try:
+        workbook.save(temporary_path)
+        os.replace(temporary_path, target_path)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _display_review_note(result: RecognitionResult) -> str:
@@ -82,6 +96,7 @@ def _append_internal_index_sheet(workbook, results: list[RecognitionResult]) -> 
                 result.failure_reason or "",
                 result.review_code or "",
                 result.status.value,
+                result.output_relative_path or "",
             ]
         )
 

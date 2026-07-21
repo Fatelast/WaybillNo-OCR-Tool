@@ -8,12 +8,12 @@ from waybill_ocr.container_code.expected_codes import read_expected_codes
 from waybill_ocr.config import default_config, resolve_default_work_dir
 from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
-from waybill_ocr.sample_verifier import verify_samples
+from waybill_ocr.sample_verifier import resolve_default_baseline_path, verify_samples
 
 
 DEFAULT_SAMPLE_INPUT = Path("samples/cases")
 DEFAULT_SAMPLE_OUTPUT = Path("samples/actual")
-DEFAULT_SAMPLE_BASELINE = Path("samples/expected/baseline.csv")
+DEFAULT_SAMPLE_BASELINE = resolve_default_baseline_path()
 
 
 def main(argv: list[str] | None = None, stdout: TextIO | None = None) -> int:

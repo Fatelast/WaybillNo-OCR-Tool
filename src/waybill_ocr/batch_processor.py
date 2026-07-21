@@ -19,6 +19,12 @@ from waybill_ocr.ocr.base import OcrEngine
 from waybill_ocr.output.classifier import copy_result_file
 from waybill_ocr.output.excel_writer import INTERNAL_INDEX_SHEET_NAME, write_results
 from waybill_ocr.pipeline import process_file
+from waybill_ocr.recovery_journal import (
+    append_recovery_result,
+    clear_recovery_journal,
+    load_recovery_results,
+    recovery_journal_path,
+)
 
 ProgressCallback = Callable[[str], None]
 
@@ -53,7 +59,14 @@ def process_directory(
     max_file_workers: int = 1,
 ) -> list[RecognitionResult]:
     tasks = _exclude_output_tasks(scan_input_files(input_dir), output_dir)
+    journal_path = recovery_journal_path(config.state_dir, output_dir) if config.state_dir else None
     existing_results = _load_existing_results(tasks, output_dir, on_progress)
+    recovered_results: dict[str, RecognitionResult] = {}
+    if journal_path is not None:
+        recovered_results = load_recovery_results(journal_path, tasks)
+        if recovered_results:
+            existing_results.update(recovered_results)
+            _emit(on_progress, f"已恢复 {len(recovered_results)} 个尚未写入结果表的处理记录")
     _emit(on_progress, f"\u626b\u63cf\u5230 {len(tasks)} \u4e2a\u6587\u4ef6")
     if tasks:
         _emit(
@@ -72,11 +85,12 @@ def process_directory(
     last_written_result_count = 0
     total = len(tasks)
     skipped_existing_result = False
+    recovered_unpersisted_result = bool(recovered_results)
     worker_limit = max(1, min(max_file_workers, 2))
     pending_tasks: list[tuple[int, FileTask]] = []
     for index, task in enumerate(tasks, start=1):
         existing_result = existing_results.get(task.relative_name) or existing_results.get(task.source_path.name)
-        if existing_result is None or not _should_skip_existing_result(existing_result):
+        if existing_result is None or not _should_skip_existing_result(existing_result, output_dir):
             pending_tasks.append((index, task))
     recognition_executor = None
     recognition_futures = {}
@@ -105,7 +119,7 @@ def process_directory(
         for index, task in enumerate(tasks, start=1):
             raise_if_cancelled(cancel_event)
             existing_result = existing_results.get(task.relative_name) or existing_results.get(task.source_path.name)
-            if existing_result is not None and _should_skip_existing_result(existing_result):
+            if existing_result is not None and _should_skip_existing_result(existing_result, output_dir):
                 skipped_existing_result = True
                 results.append(existing_result)
                 _emit(on_progress, f"\u5df2\u8df3\u8fc7\u5df2\u5904\u7406\u6587\u4ef6: {task.relative_name}")
@@ -128,14 +142,27 @@ def process_directory(
                     result = replace(result, relative_name=task.relative_name)
                 result = apply_expected_review_code(result, expected_codes)
                 raise_if_cancelled(cancel_event)
-                copy_result_file(result, output_dir)
+                copied_path = _copy_result_file(
+                    result,
+                    output_dir,
+                    existing_result.output_relative_path if existing_result is not None else None,
+                )
+                result = replace(result, output_relative_path=_output_relative_path(copied_path, output_dir))
             except ProcessingCancelled:
                 raise
             except Exception as exc:
                 result = _failed_result(task, f"PROCESS_FAILED: {exc}", started_at)
                 _emit(on_progress, f"\u6587\u4ef6\u5904\u7406\u5931\u8d25\uff0c\u5df2\u8df3\u8fc7: {task.relative_name} ({exc})")
-                _copy_failed_result(result, output_dir, on_progress)
+                result = _copy_failed_result(
+                    result,
+                    output_dir,
+                    on_progress,
+                    previous_output_relative_path=(
+                        existing_result.output_relative_path if existing_result is not None else None
+                    ),
+                )
 
+            _append_recovery_result(journal_path, result, on_progress)
             results.append(result)
             new_result_count += 1
             pending_workbook_results += 1
@@ -156,6 +183,7 @@ def process_directory(
                 workbook_path = write_outcome.path
                 if write_outcome.written:
                     last_written_result_count = len(results)
+                    _clear_recovery_if_persisted(journal_path, write_outcome, output_dir)
                 pending_workbook_results = 0
             _emit(on_progress, _format_result_message(result))
 
@@ -164,6 +192,7 @@ def process_directory(
         should_write_final_results = bool(results) and (
             pending_workbook_results > 0
             or (new_result_count > 0 and last_written_result_count != len(results))
+            or recovered_unpersisted_result
             or (
                 skipped_existing_result
                 and workbook_path is None
@@ -179,19 +208,21 @@ def process_directory(
                 latest_comparison_report,
             )
             workbook_path = write_outcome.path
+            _clear_recovery_if_persisted(journal_path, write_outcome, output_dir)
         _emit_comparison_report(latest_comparison_report, on_progress)
         _emit(on_progress, "\u5904\u7406\u5b8c\u6210")
         _emit_event(on_progress_event, ProcessingProgressEvent(kind="complete"))
         return results
     except ProcessingCancelled:
         if results:
-            _write_results(
+            write_outcome = _write_results(
                 results,
                 output_dir,
                 workbook_path,
                 on_progress,
                 _comparison_report(expected_codes, results, expected_invalid_entries),
             )
+            _clear_recovery_if_persisted(journal_path, write_outcome, output_dir)
         _emit(on_progress, f"\u5df2\u53d6\u6d88\uff1a\u5df2\u5904\u7406 {len(results)}/{total}")
         _emit_event(on_progress_event, ProcessingProgressEvent(kind="cancelled"))
         return results
@@ -217,8 +248,13 @@ def _process_file_with_progress(
     return process_file(task, config, ocr_engine, cancel_event=cancel_event)
 
 
-def _should_skip_existing_result(result: RecognitionResult) -> bool:
-    return result.status is RecognitionStatus.SUCCESS
+def _should_skip_existing_result(result: RecognitionResult, output_dir: Path) -> bool:
+    if result.status is not RecognitionStatus.SUCCESS:
+        return False
+    if not result.output_relative_path:
+        return True
+    recorded_path = _recorded_output_path(output_dir, result.output_relative_path)
+    return recorded_path is not None and recorded_path.is_file()
 
 
 def _failed_result(task: FileTask, reason: str, started_at: float) -> RecognitionResult:
@@ -236,11 +272,74 @@ def _failed_result(task: FileTask, reason: str, started_at: float) -> Recognitio
     )
 
 
-def _copy_failed_result(result: RecognitionResult, output_dir: Path, on_progress: ProgressCallback | None) -> None:
+def _copy_failed_result(
+    result: RecognitionResult,
+    output_dir: Path,
+    on_progress: ProgressCallback | None,
+    previous_output_relative_path: str | None = None,
+) -> RecognitionResult:
     try:
-        copy_result_file(result, output_dir)
+        copied_path = _copy_result_file(result, output_dir, previous_output_relative_path)
+
+        return replace(result, output_relative_path=_output_relative_path(copied_path, output_dir))
     except Exception as exc:
         _emit(on_progress, f"\u5931\u8d25\u6587\u4ef6\u590d\u5236\u5230\u672a\u8bc6\u522b\u76ee\u5f55\u5931\u8d25\uff0c\u5df2\u7ee7\u7eed: {result.original_name} ({exc})")
+        return result
+
+
+def _append_recovery_result(
+    journal_path: Path | None,
+    result: RecognitionResult,
+    on_progress: ProgressCallback | None,
+) -> None:
+    if journal_path is None:
+        return
+    try:
+        append_recovery_result(journal_path, result)
+    except OSError as exc:
+        _emit(on_progress, f"处理状态保存失败，程序将继续处理: {exc}")
+
+
+def _clear_recovery_if_persisted(
+    journal_path: Path | None,
+    outcome: WorkbookWriteOutcome,
+    output_dir: Path,
+) -> None:
+    if journal_path is None or not outcome.written or outcome.path is None:
+        return
+    if outcome.path.resolve() == (output_dir / RESULT_WORKBOOK_NAME).resolve():
+        clear_recovery_journal(journal_path)
+
+
+def _output_relative_path(output_path: Path, output_dir: Path) -> str:
+    return output_path.resolve().relative_to(output_dir.resolve()).as_posix()
+
+
+def _copy_result_file(
+    result: RecognitionResult,
+    output_dir: Path,
+    previous_output_relative_path: str | None,
+) -> Path:
+    if previous_output_relative_path is None:
+        return copy_result_file(result, output_dir)
+    return copy_result_file(
+        result,
+        output_dir,
+        previous_output_relative_path=previous_output_relative_path,
+    )
+
+
+def _recorded_output_path(output_dir: Path, relative_path: str) -> Path | None:
+    relative = Path(relative_path)
+    if relative.is_absolute():
+        return None
+    output_root = output_dir.resolve()
+    candidate = (output_root / relative).resolve()
+    try:
+        candidate.relative_to(output_root)
+    except ValueError:
+        return None
+    return candidate
 
 
 def _write_results(
@@ -323,6 +422,7 @@ def _load_existing_results(
                 relative_name=result_relative_name,
                 review_note=_optional_string(_row_value(row, headers, "备注")),
                 review_code=_optional_string(_row_value(row, headers, "复核候选")),
+                output_relative_path=_optional_string(_row_value(row, headers, "输出相对路径")),
             )
         return results
     except Exception as exc:

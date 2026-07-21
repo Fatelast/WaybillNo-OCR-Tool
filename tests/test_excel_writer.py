@@ -4,12 +4,21 @@ from openpyxl import load_workbook
 
 from waybill_ocr.constants import RESULT_WORKBOOK_NAME
 from waybill_ocr.models import RecognitionResult, RecognitionSource, RecognitionStatus
+from waybill_ocr.output import excel_writer
 from waybill_ocr.output.excel_writer import write_results
 
 
 VISIBLE_HEADERS = ["原始文件名", "识别箱号", "识别状态", "处理耗时ms", "备注"]
-INTERNAL_HEADERS = ["原始文件名", "相对路径", "原始识别箱号", "识别来源", "失败原因", "复核候选", "识别状态"]
-
+INTERNAL_HEADERS = [
+    "原始文件名",
+    "相对路径",
+    "原始识别箱号",
+    "识别来源",
+    "失败原因",
+    "复核候选",
+    "识别状态",
+    "输出相对路径",
+]
 
 def test_write_results_creates_workbook_with_clean_recognition_rows(tmp_path: Path):
     source = tmp_path / "HNKU6331795.jpg"
@@ -232,6 +241,7 @@ def test_write_results_stores_diagnostics_in_hidden_internal_index(tmp_path: Pat
         ocr_text="YYCU6002610",
         elapsed_ms=1,
         review_code="YYCU6003610",
+        output_relative_path="箱号错误/YYCU6003610-待确认.pdf",
     )
 
     workbook_path = write_results([result], tmp_path)
@@ -248,9 +258,38 @@ def test_write_results_stores_diagnostics_in_hidden_internal_index(tmp_path: Pat
         "INVALID_CHECK_DIGIT",
         "YYCU6003610",
         "箱号错误",
+        "箱号错误/YYCU6003610-待确认.pdf",
     ]
 
 
+def test_write_results_replaces_workbook_atomically(tmp_path: Path, monkeypatch):
+    source = tmp_path / "waybill.pdf"
+    result = RecognitionResult(
+        source_path=source,
+        original_name=source.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="HNKU6331795",
+        elapsed_ms=1,
+    )
+    replace_calls: list[tuple[Path, Path]] = []
+    real_replace = excel_writer.os.replace
+
+    def recording_replace(source_path, target_path):
+        replace_calls.append((Path(source_path), Path(target_path)))
+        real_replace(source_path, target_path)
+
+    monkeypatch.setattr(excel_writer.os, "replace", recording_replace)
+
+    workbook_path = write_results([result], tmp_path)
+
+    assert workbook_path.exists()
+    assert len(replace_calls) == 1
+    assert replace_calls[0][1] == workbook_path
+    assert replace_calls[0][0] != workbook_path
+    assert not list(tmp_path.glob("*.tmp.xlsx"))
 
 def test_write_results_comparison_sheet_uses_expected_order_and_status(tmp_path: Path):
     from waybill_ocr.container_code.expected_codes import compare_expected_codes

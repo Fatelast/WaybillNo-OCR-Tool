@@ -38,3 +38,4 @@ class RecognitionResult:
     review_note: str | None = None
     evidence_path: Path | None = None
     review_code: str | None = None
+    output_relative_path: str | None = None

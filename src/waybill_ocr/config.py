@@ -18,12 +18,14 @@ class AppConfig:
     ocr_retries: int = 2
     work_dir: Path | None = None
     ocr_speed_mode: str = OCR_SPEED_BALANCED
+    state_dir: Path | None = None
 
 
 def default_config(
     base_dir: Path | None = None,
     env: Mapping[str, str] | None = None,
     work_dir: Path | None = None,
+    state_dir: Path | None = None,
 ) -> AppConfig:
     runtime_base = base_dir or resolve_runtime_base_dir()
     current_env = env if env is not None else os.environ
@@ -34,6 +36,7 @@ def default_config(
         ocr_retries=_resolve_ocr_retries(current_env),
         work_dir=work_dir,
         ocr_speed_mode=_resolve_ocr_speed_mode(current_env),
+        state_dir=state_dir or resolve_default_state_dir(current_env),
     )
 
 
@@ -91,6 +94,20 @@ def _resolve_ocr_speed_mode(env: Mapping[str, str]) -> str:
     if value in OCR_SPEED_MODES:
         return value
     return OCR_SPEED_BALANCED
+
+
+def resolve_default_state_dir(env: Mapping[str, str] | None = None) -> Path:
+    current_env = env if env is not None else os.environ
+    override = current_env.get("WAYBILL_OCR_STATE_DIR")
+    if override:
+        return Path(override)
+
+    local_app_data = current_env.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "OCRTool" / "state"
+
+    return Path(tempfile.gettempdir()) / "OCRTool" / "state"
+
 
 def resolve_default_work_dir(env: Mapping[str, str] | None = None) -> Path:
     current_env = env if env is not None else os.environ

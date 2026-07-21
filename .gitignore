@@ -18,6 +18,10 @@ samples/input/*
 !samples/input/*/.gitkeep
 samples/actual/*
 !samples/actual/.gitkeep
+samples/cases/**
+!samples/cases/**/
+!samples/cases/**/.gitkeep
+samples/expected/baseline.local.csv
 pytest-cache-files-*/
 .idea/
 local-env.ps1

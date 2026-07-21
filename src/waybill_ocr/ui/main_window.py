@@ -19,7 +19,7 @@ from waybill_ocr.delivery import APP_NAME, CURRENT_VERSION
 from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
 from waybill_ocr.models import RecognitionStatus
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
-from waybill_ocr.sample_verifier import verify_samples
+from waybill_ocr.sample_verifier import resolve_default_baseline_path, verify_samples
 from waybill_ocr.review_confirmation import (
     auto_confirm_expected_candidates,
     confirm_review_candidates,
@@ -32,7 +32,7 @@ MAX_TASKS = 2
 SAMPLE_INPUT_DIR = Path("samples/cases")
 SAMPLE_FALLBACK_INPUT_DIR = Path("samples/input")
 SAMPLE_OUTPUT_DIR = Path("samples/actual")
-SAMPLE_BASELINE_PATH = Path("samples/expected/baseline.csv")
+SAMPLE_BASELINE_PATH = resolve_default_baseline_path()
 
 BG_COLOR = "#f4f7fb"
 SURFACE_COLOR = "#ffffff"
