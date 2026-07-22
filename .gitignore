@@ -22,6 +22,7 @@ samples/cases/**
 !samples/cases/**/
 !samples/cases/**/.gitkeep
 samples/expected/baseline.local.csv
+samples/expected/baseline.draft.csv
 pytest-cache-files-*/
 .idea/
 local-env.ps1

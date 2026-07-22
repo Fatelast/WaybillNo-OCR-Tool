@@ -1062,3 +1062,52 @@ def test_process_directory_uses_expected_list_review_code_before_copy(tmp_path: 
     workbook = load_workbook(output_dir / "识别结果.xlsx")
     assert workbook.active["B2"].value == "GESU5903360"
     assert workbook.active["C2"].value == RecognitionStatus.UNRECOGNIZED.value
+
+
+def test_process_directory_can_force_reprocess_existing_success(tmp_path: Path, monkeypatch):
+    from waybill_ocr.output.excel_writer import write_results
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "waybill.jpg"
+    source_path.write_bytes(b"source")
+    existing_result = RecognitionResult(
+        source_path=source_path,
+        original_name=source_path.name,
+        status=RecognitionStatus.SUCCESS,
+        container_code="HNKU6331795",
+        source=RecognitionSource.OCR,
+        failure_reason=None,
+        ocr_text="HNKU6331795",
+        elapsed_ms=1,
+    )
+    write_results([existing_result], output_dir)
+    processed: list[str] = []
+
+    def fake_process_file(task: FileTask, _config: AppConfig, _engine: FakeOcrEngine, cancel_event=None):
+        processed.append(task.relative_name)
+        return RecognitionResult(
+            source_path=task.source_path,
+            original_name=task.source_path.name,
+            relative_name=task.relative_name,
+            status=RecognitionStatus.SUCCESS,
+            container_code="GESU5903360",
+            source=RecognitionSource.OCR,
+            failure_reason=None,
+            ocr_text="GESU5903360",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(batch_module, "process_file", fake_process_file)
+
+    results = batch_module.process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        config=AppConfig(),
+        ocr_engine=FakeOcrEngine(),
+        skip_existing_successes=False,
+    )
+
+    assert processed == ["waybill.jpg"]
+    assert results[0].container_code == "GESU5903360"

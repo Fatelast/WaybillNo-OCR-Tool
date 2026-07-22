@@ -28,12 +28,12 @@ class CandidateSelection:
     raw_candidate: str | None = None
 
 
-
 @dataclass(frozen=True)
 class ReviewCandidateScore:
     code: str
     score: int
     reasons: tuple[str, ...]
+
 
 @dataclass(frozen=True)
 class _ScoredCandidate:
@@ -65,7 +65,16 @@ def _select_repaired_candidate(texts: list[CandidateText]) -> CandidateSelection
     return _select_candidates(texts, _iter_repaired_matches)
 
 
+def rank_valid_candidates(texts: list[CandidateText]) -> list[CandidateSelection]:
+    return _rank_candidates(texts, _iter_clear_matches)
+
+
 def _select_candidates(texts: list[CandidateText], match_iter):
+    ranked = _rank_candidates(texts, match_iter)
+    return ranked[0] if ranked else None
+
+
+def _rank_candidates(texts: list[CandidateText], match_iter) -> list[CandidateSelection]:
     scored: dict[str, _ScoredCandidate] = {}
     order = 0
     for item in texts:
@@ -92,16 +101,16 @@ def _select_candidates(texts: list[CandidateText], match_iter):
                     raw_candidate=current.raw_candidate,
                 )
 
-    if not scored:
-        return None
-
-    best = max(scored.values(), key=lambda item: (item.score, -item.order))
-    return CandidateSelection(
-        code=best.code,
-        score=best.score,
-        is_repaired=best.is_repaired,
-        raw_candidate=best.raw_candidate,
-    )
+    ordered = sorted(scored.values(), key=lambda item: (-item.score, item.order))
+    return [
+        CandidateSelection(
+            code=item.code,
+            score=item.score,
+            is_repaired=item.is_repaired,
+            raw_candidate=item.raw_candidate,
+        )
+        for item in ordered
+    ]
 
 
 def _iter_clear_matches(normalized: str):
@@ -129,6 +138,7 @@ def _score_candidate(context: str, region_name: str) -> int:
         score += 25
     return score
 
+
 def score_review_candidates(
     base_text: str,
     enhanced_text: str,
@@ -153,6 +163,7 @@ def score_review_candidates(
             reasons.append("expected_match")
         scored.append(ReviewCandidateScore(code=code, score=score, reasons=tuple(reasons)))
     return sorted(scored, key=lambda item: item.score, reverse=True)
+
 
 def has_clear_review_winner(
     scores: list[ReviewCandidateScore],

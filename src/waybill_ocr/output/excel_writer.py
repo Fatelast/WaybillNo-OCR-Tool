@@ -10,6 +10,8 @@ from waybill_ocr.container_code.expected_codes import ComparisonReport
 from waybill_ocr.error_messages import merge_review_note_with_failure_reason
 from waybill_ocr.models import RecognitionResult, RecognitionStatus
 
+MAX_VISIBLE_REVIEW_NOTE_LENGTH = 240
+
 
 HEADERS = ["原始文件名", "识别箱号", "识别状态", "处理耗时ms", "备注"]
 INTERNAL_INDEX_SHEET_NAME = "内部索引"
@@ -71,9 +73,19 @@ def _save_workbook_atomically(workbook: Workbook, target_path: Path) -> None:
 
 
 def _display_review_note(result: RecognitionResult) -> str:
+    review_note = _truncate_review_note(result.review_note)
     if result.status is RecognitionStatus.SUCCESS:
-        return result.review_note or ""
-    return merge_review_note_with_failure_reason(result.review_note, result.failure_reason) or ""
+        return review_note
+    return merge_review_note_with_failure_reason(review_note or None, result.failure_reason) or ""
+
+
+def _truncate_review_note(note: str | None) -> str:
+    if not note:
+        return ""
+    if len(note) <= MAX_VISIBLE_REVIEW_NOTE_LENGTH:
+        return note
+    shortened = note[:MAX_VISIBLE_REVIEW_NOTE_LENGTH].rstrip(" ,;，；")
+    return f"{shortened}……（其余候选已省略）"
 
 
 def _display_container_code(result: RecognitionResult) -> str:

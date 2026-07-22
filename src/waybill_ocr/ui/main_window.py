@@ -3,6 +3,7 @@ import threading
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic
 from tkinter import filedialog, messagebox, ttk
 
 from waybill_ocr.batch_processor import ProcessingProgressEvent, count_retryable_results
@@ -84,6 +85,7 @@ class MainWindow:
         self._configure_style()
         self._build_layout()
         self._restore_recent_paths()
+        self.root.after(1000, self._refresh_task_durations)
 
     def run(self) -> None:
         self.root.mainloop()
@@ -93,6 +95,23 @@ class MainWindow:
         style.theme_use("clam")
         style.configure("Vertical.TScrollbar", background="#cbd5e1", troughcolor="#1e293b", bordercolor="#1e293b")
         style.configure("Horizontal.TProgressbar", troughcolor="#e2e8f0", background=PRIMARY_COLOR, bordercolor="#e2e8f0")
+        style.configure(
+            "Review.Treeview",
+            background=SURFACE_COLOR,
+            fieldbackground=SURFACE_COLOR,
+            foreground=TEXT_COLOR,
+            bordercolor=BORDER_COLOR,
+            rowheight=32,
+            font=(FONT_FAMILY, 9),
+        )
+        style.configure(
+            "Review.Treeview.Heading",
+            background=SURFACE_MUTED,
+            foreground=TEXT_COLOR,
+            bordercolor=BORDER_COLOR,
+            font=(FONT_FAMILY, 9, "bold"),
+        )
+        style.map("Review.Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", TEXT_COLOR)])
 
     def _build_layout(self) -> None:
         page = tk.Frame(self.root, bg=BG_COLOR, padx=14, pady=12)
@@ -663,6 +682,7 @@ class MainWindow:
             self.root.after(0, self._finish)
 
     def _finish(self) -> None:
+        self._finish_unfinished_task_timers()
         self.running = False
         self.cancel_event = None
         self._set_idle_controls()
@@ -713,6 +733,7 @@ class MainWindow:
 
         state = self.task_progress_states[task_index]
         if event.kind == "scanned":
+            _start_task_progress_timer(state)
             state["total"] = event.total
         elif event.kind == "result" and event.result is not None:
             self._record_task_result(state, event.result.status)
@@ -722,7 +743,9 @@ class MainWindow:
             and event.previous_status is not None
         ):
             self._replace_task_result_status(state, event.previous_status, event.result.status)
-        elif event.kind not in {"complete", "cancelled"}:
+        elif event.kind in {"complete", "cancelled"}:
+            state["finished_at"] = state.get("finished_at") or monotonic()
+        else:
             return
 
         self._render_task_progress(task_index)
@@ -781,7 +804,7 @@ class MainWindow:
         self.active_output_dirs = [task.output_dir for task in tasks]
         for index, row in enumerate(self.task_rows):
             enabled = index < len(tasks)
-            state = {"total": 0, "processed": 0, "success": 0, "unrecognized": 0, "invalid": 0}
+            state = _new_task_progress_state(enabled)
             self.task_progress_states.append(state)
             row["progress_text_var"].set("待处理" if enabled else "未启用")
             row["summary_var"].set("已处理 0/0 | 成功 0 | 未识别 0 | 箱号错误 0")
@@ -789,7 +812,7 @@ class MainWindow:
             row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
 
     def _reset_single_task_progress(self, task_index: int) -> None:
-        state = {"total": 0, "processed": 0, "success": 0, "unrecognized": 0, "invalid": 0}
+        state = _new_task_progress_state(True)
         self.task_progress_states[task_index] = state
         row = self.task_rows[task_index]
         row["progress_text_var"].set("\u5f85\u5904\u7406")
@@ -827,12 +850,29 @@ class MainWindow:
         state = self.task_progress_states[task_index]
         total = state["total"]
         processed = state["processed"]
-        row["progress_text_var"].set(f"进度 {processed}/{total}")
+        elapsed = _format_task_duration(_task_elapsed_seconds(state))
+        row["progress_text_var"].set(f"进度 {processed}/{total} | 用时 {elapsed}")
         row["summary_var"].set(
             f"已处理 {processed}/{total} | 成功 {state['success']} | "
             f"未识别 {state['unrecognized']} | 箱号错误 {state['invalid']}"
         )
         row["progressbar"].config(maximum=max(total, 1), value=min(processed, total) if total else processed)
+
+    def _refresh_task_durations(self) -> None:
+        if self.running:
+            for task_index, state in enumerate(self.task_progress_states):
+                if state.get("started_at") is not None and state.get("finished_at") is None:
+                    self._render_task_progress(task_index)
+        self.root.after(1000, self._refresh_task_durations)
+
+    def _finish_unfinished_task_timers(self) -> None:
+        finished_at = monotonic()
+        for task_index, state in enumerate(self.task_progress_states):
+            if state.get("started_at") is None:
+                continue
+            if state.get("finished_at") is None:
+                state["finished_at"] = finished_at
+            self._render_task_progress(task_index)
 
     def _enable_output_buttons(self) -> None:
         for index, output_dir in enumerate(self.active_output_dirs):
@@ -874,8 +914,8 @@ class MainWindow:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("待确认文件")
-        dialog.geometry("900x460")
-        dialog.minsize(760, 360)
+        dialog.geometry("940x520")
+        dialog.minsize(820, 420)
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.columnconfigure(0, weight=1)
@@ -887,21 +927,23 @@ class MainWindow:
         frame.rowconfigure(0, weight=1)
         tree = ttk.Treeview(
             frame,
+            style="Review.Treeview",
             columns=("selected", "filename", "status", "code", "reason"),
             show="headings",
-            selectmode="none",
+            selectmode="browse",
         )
         headings = {
-            "selected": "确认",
+            "selected": "选择",
             "filename": "文件名",
             "status": "当前目录",
             "code": "待确认箱号",
             "reason": "状态",
         }
-        widths = {"selected": 56, "filename": 300, "status": 90, "code": 140, "reason": 240}
+        widths = {"selected": 96, "filename": 290, "status": 90, "code": 140, "reason": 220}
         for column, heading in headings.items():
-            tree.heading(column, text=heading)
-            tree.column(column, width=widths[column], anchor=tk.W)
+            anchor = tk.CENTER if column == "selected" else tk.W
+            tree.heading(column, text=heading, anchor=anchor)
+            tree.column(column, width=widths[column], minwidth=widths[column], anchor=anchor)
         tree.grid(row=0, column=0, sticky=tk.NSEW)
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
         scrollbar.grid(row=0, column=1, sticky=tk.NS)
@@ -909,19 +951,41 @@ class MainWindow:
 
         candidate_by_item = {}
         selected_items: set[str] = set()
+        valid_candidate_count = sum(1 for candidate in candidates if candidate.valid)
+        selection_summary_var = tk.StringVar(value=_review_selection_summary(0, valid_candidate_count))
+        tree.tag_configure("checked", background="#eff6ff", foreground=TEXT_COLOR)
+        tree.tag_configure("disabled", background="#f8fafc", foreground="#98a2b3")
+
         for candidate in candidates:
             item_id = tree.insert(
                 "",
                 tk.END,
                 values=(
-                    "□",
+                    _review_selection_marker(selected=False, valid=candidate.valid),
                     candidate.source_path.name,
                     candidate.source_status.value,
                     candidate.review_code,
                     "可整理" if candidate.valid else candidate.reason or "不可整理",
                 ),
+                tags=() if candidate.valid else ("disabled",),
             )
             candidate_by_item[item_id] = candidate
+
+        def set_item_selected(item_id: str, selected: bool) -> None:
+            candidate = candidate_by_item[item_id]
+            if not candidate.valid:
+                return
+            if selected:
+                selected_items.add(item_id)
+            else:
+                selected_items.discard(item_id)
+            values = list(tree.item(item_id, "values"))
+            values[0] = _review_selection_marker(selected=selected, valid=True)
+            tree.item(item_id, values=values, tags=("checked",) if selected else ())
+            selection_summary_var.set(_review_selection_summary(len(selected_items), valid_candidate_count))
+
+        def toggle_item_by_id(item_id: str) -> None:
+            set_item_selected(item_id, item_id not in selected_items)
 
         def toggle_item(event) -> str | None:
             if tree.identify_region(event.x, event.y) != "cell":
@@ -929,21 +993,23 @@ class MainWindow:
             item_id = tree.identify_row(event.y)
             if not item_id or tree.identify_column(event.x) != "#1":
                 return None
-            candidate = candidate_by_item[item_id]
-            if not candidate.valid:
-                return "break"
-            if item_id in selected_items:
-                selected_items.remove(item_id)
-                marker = "□"
-            else:
-                selected_items.add(item_id)
-                marker = "✓"
-            values = list(tree.item(item_id, "values"))
-            values[0] = marker
-            tree.item(item_id, values=values)
+            tree.selection_set(item_id)
+            tree.focus(item_id)
+            toggle_item_by_id(item_id)
+            return "break"
+
+        def toggle_focused_item(_event) -> str:
+            item_id = tree.focus()
+            if not item_id:
+                selected = tree.selection()
+                item_id = selected[0] if selected else ""
+            if item_id:
+                toggle_item_by_id(item_id)
             return "break"
 
         def open_item(event) -> None:
+            if tree.identify_column(event.x) == "#1":
+                return
             item_id = tree.identify_row(event.y)
             if not item_id:
                 return
@@ -990,33 +1056,59 @@ class MainWindow:
         tree.bind("<Button-1>", toggle_item)
         tree.bind("<Double-1>", open_item)
         tree.bind("<Button-3>", show_context_menu)
+        tree.bind("<space>", toggle_focused_item)
 
         action_bar = tk.Frame(frame, bg=SURFACE_COLOR)
         action_bar.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
         action_bar.columnconfigure(0, weight=1)
-        tk.Label(
+
+        hint_panel = tk.Frame(
             action_bar,
-            text="双击文件可用系统默认程序查看；点击“确认”列勾选后再批量整理。",
+            bg="#eff6ff",
+            highlightbackground="#bfdbfe",
+            highlightthickness=1,
+            padx=12,
+            pady=9,
+        )
+        hint_panel.grid(row=0, column=0, sticky=tk.EW)
+        hint_panel.columnconfigure(1, weight=1)
+        tk.Frame(hint_panel, bg=PRIMARY_COLOR, width=4).grid(
+            row=0, column=0, rowspan=2, sticky=tk.NS, padx=(0, 10)
+        )
+        tk.Label(
+            hint_panel,
+            text="操作提示",
+            bg="#eff6ff",
+            fg=PRIMARY_COLOR,
+            font=(FONT_FAMILY, 9, "bold"),
+        ).grid(row=0, column=1, sticky=tk.W)
+        tk.Label(
+            hint_panel,
+            text="双击文件查看内容；确认箱号无误后，在“选择”列勾选文件，再点击“整理已确认文件”。",
+            bg="#eff6ff",
+            fg="#344054",
+            font=(FONT_FAMILY, 9),
+        ).grid(row=1, column=1, sticky=tk.W, pady=(2, 0))
+
+        controls = tk.Frame(action_bar, bg=SURFACE_COLOR)
+        controls.grid(row=1, column=0, sticky=tk.EW, pady=(10, 0))
+        controls.columnconfigure(0, weight=1)
+        tk.Label(
+            controls,
+            textvariable=selection_summary_var,
             bg=SURFACE_COLOR,
-            fg=MUTED_TEXT_COLOR,
-            font=(FONT_FAMILY, 8),
+            fg=PRIMARY_COLOR,
+            font=(FONT_FAMILY, 9, "bold"),
         ).grid(row=0, column=0, sticky=tk.W)
 
         def select_all() -> None:
             for item_id, candidate in candidate_by_item.items():
-                if not candidate.valid:
-                    continue
-                selected_items.add(item_id)
-                values = list(tree.item(item_id, "values"))
-                values[0] = "✓"
-                tree.item(item_id, values=values)
+                if candidate.valid:
+                    set_item_selected(item_id, True)
 
         def clear_all() -> None:
             for item_id in list(selected_items):
-                values = list(tree.item(item_id, "values"))
-                values[0] = "□"
-                tree.item(item_id, values=values)
-            selected_items.clear()
+                set_item_selected(item_id, False)
 
         def confirm_selected() -> None:
             selected = [candidate_by_item[item_id] for item_id in selected_items]
@@ -1035,38 +1127,41 @@ class MainWindow:
             self._enable_output_buttons()
 
         tk.Button(
-            action_bar,
+            controls,
             text="全选可整理项",
             command=select_all,
             bg="#eef4ff",
             fg=PRIMARY_COLOR,
             relief=tk.FLAT,
-            padx=10,
-            pady=5,
-            font=(FONT_FAMILY, 8),
+            padx=14,
+            pady=7,
+            font=(FONT_FAMILY, 9),
+            cursor="hand2",
         ).grid(row=0, column=1, padx=(8, 4))
         tk.Button(
-            action_bar,
+            controls,
             text="取消全选",
             command=clear_all,
             bg="#eef4ff",
             fg=PRIMARY_COLOR,
             relief=tk.FLAT,
-            padx=10,
-            pady=5,
-            font=(FONT_FAMILY, 8),
+            padx=14,
+            pady=7,
+            font=(FONT_FAMILY, 9),
+            cursor="hand2",
         ).grid(row=0, column=2, padx=4)
         tk.Button(
-            action_bar,
+            controls,
             text="整理已确认文件",
             command=confirm_selected,
             bg=PRIMARY_COLOR,
             fg="#ffffff",
             activebackground=PRIMARY_HOVER,
             relief=tk.FLAT,
-            padx=12,
-            pady=5,
-            font=(FONT_FAMILY, 8, "bold"),
+            padx=16,
+            pady=7,
+            font=(FONT_FAMILY, 9, "bold"),
+            cursor="hand2",
         ).grid(row=0, column=3, padx=(4, 0))
 
     def _auto_confirm_expected(self, task_index: int) -> None:
@@ -1179,6 +1274,52 @@ class MainWindow:
 
 def _speed_mode_description(speed_mode: str) -> str:
     return SPEED_MODE_DESCRIPTIONS.get(speed_mode, SPEED_MODE_DESCRIPTIONS[OCR_SPEED_BALANCED])
+
+
+def _review_selection_marker(*, selected: bool, valid: bool) -> str:
+    if not valid:
+        return "不可选"
+    return "☑ 已选" if selected else "☐ 选择"
+
+
+def _review_selection_summary(selected_count: int, valid_count: int) -> str:
+    return f"已选择 {selected_count} 个 / 可整理 {valid_count} 个"
+
+
+def _new_task_progress_state(_enabled: bool) -> dict:
+    return {
+        "total": 0,
+        "processed": 0,
+        "success": 0,
+        "unrecognized": 0,
+        "invalid": 0,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+
+def _start_task_progress_timer(state: dict, now: float | None = None) -> None:
+    if state.get("started_at") is not None:
+        return
+    state["started_at"] = now if now is not None else monotonic()
+
+
+def _task_elapsed_seconds(state: dict, now: float | None = None) -> float:
+    started_at = state.get("started_at")
+    if started_at is None:
+        return 0.0
+    finished_at = state.get("finished_at")
+    end = finished_at if finished_at is not None else (now if now is not None else monotonic())
+    return max(0.0, end - started_at)
+
+
+def _format_task_duration(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:02d}:{remaining_minutes:02d}:{remaining_seconds:02d}"
+    return f"{remaining_minutes:02d}:{remaining_seconds:02d}"
 
 
 def _duplicate_output_dir(raw_tasks) -> Path | None:

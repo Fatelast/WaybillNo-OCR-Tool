@@ -59,12 +59,15 @@ def process_directory(
     expected_invalid_entries: list[str] | None = None,
     on_progress_event: ProgressEventCallback | None = None,
     max_file_workers: int = 1,
+    skip_existing_successes: bool = True,
 ) -> list[RecognitionResult]:
     tasks = _exclude_output_tasks(scan_input_files(input_dir), output_dir)
     journal_path = recovery_journal_path(config.state_dir, output_dir) if config.state_dir else None
     existing_results = _load_existing_results(tasks, output_dir, on_progress)
     recovered_results: dict[str, RecognitionResult] = {}
-    if journal_path is not None:
+    if journal_path is not None and not skip_existing_successes:
+        clear_recovery_journal(journal_path)
+    if journal_path is not None and skip_existing_successes:
         recovered_results = load_recovery_results(journal_path, tasks)
         if recovered_results:
             existing_results.update(recovered_results)
@@ -92,7 +95,11 @@ def process_directory(
     pending_tasks: list[tuple[int, FileTask]] = []
     for index, task in enumerate(tasks, start=1):
         existing_result = existing_results.get(task.relative_name) or existing_results.get(task.source_path.name)
-        if existing_result is None or not _should_skip_existing_result(existing_result, output_dir):
+        if (
+            not skip_existing_successes
+            or existing_result is None
+            or not _should_skip_existing_result(existing_result, output_dir)
+        ):
             pending_tasks.append((index, task))
     recognition_executor = None
     recognition_futures = {}
@@ -121,7 +128,11 @@ def process_directory(
         for index, task in enumerate(tasks, start=1):
             raise_if_cancelled(cancel_event)
             existing_result = existing_results.get(task.relative_name) or existing_results.get(task.source_path.name)
-            if existing_result is not None and _should_skip_existing_result(existing_result, output_dir):
+            if (
+                skip_existing_successes
+                and existing_result is not None
+                and _should_skip_existing_result(existing_result, output_dir)
+            ):
                 skipped_existing_result = True
                 results.append(existing_result)
                 duplicate_changes = _reconcile_duplicate_results(

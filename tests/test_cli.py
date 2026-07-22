@@ -1,6 +1,7 @@
 from io import StringIO
 from pathlib import Path
 
+from types import SimpleNamespace
 import waybill_ocr.app as app_module
 import waybill_ocr.cli as cli_module
 from waybill_ocr.config import AppConfig
@@ -149,3 +150,82 @@ def test_cli_batch_accepts_expected_code_list(monkeypatch, tmp_path: Path):
 
 def test_cli_verify_samples_defaults_to_cases_directory():
     assert cli_module.DEFAULT_SAMPLE_INPUT == Path("samples/cases")
+
+
+def test_cli_prepare_sample_baseline_generates_draft(monkeypatch, tmp_path: Path):
+    input_dir = tmp_path / "cases"
+    expected_path = tmp_path / "expected.txt"
+    output_dir = tmp_path / "actual"
+    draft_path = tmp_path / "draft.csv"
+    work_dir = tmp_path / "work"
+    input_dir.mkdir()
+    expected_path.write_text("HNKU6331795\n", encoding="utf-8")
+    stdout = StringIO()
+    calls = []
+
+    report = SimpleNamespace(total=3, suggested=2, draft_path=draft_path)
+
+    monkeypatch.setattr(cli_module, "resolve_default_work_dir", lambda: work_dir)
+    monkeypatch.setattr(cli_module, "default_config", lambda **kwargs: AppConfig(**kwargs))
+    monkeypatch.setattr(cli_module, "TesseractEngine", lambda config: ("engine", config))
+    monkeypatch.setattr(
+        cli_module,
+        "prepare_sample_baseline",
+        lambda **kwargs: calls.append(kwargs) or report,
+    )
+
+    exit_code = cli_module.main(
+        [
+            "prepare-sample-baseline",
+            "--input",
+            str(input_dir),
+            "--expected",
+            str(expected_path),
+            "--output",
+            str(output_dir),
+            "--draft",
+            str(draft_path),
+        ],
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    assert calls[0]["input_dir"] == input_dir
+    assert calls[0]["expected_path"] == expected_path
+    assert calls[0]["draft_path"] == draft_path
+    assert "\u6837\u672c\u57fa\u7ebf\u8349\u7a3f\u5df2\u751f\u6210" in stdout.getvalue()
+
+
+def test_cli_import_sample_baseline_uses_confirmed_draft(monkeypatch, tmp_path: Path):
+    input_dir = tmp_path / "cases"
+    draft_path = tmp_path / "draft.csv"
+    baseline_path = tmp_path / "baseline.local.csv"
+    input_dir.mkdir()
+    draft_path.write_text("confirmed\ntrue\n", encoding="utf-8")
+    stdout = StringIO()
+    calls = []
+
+    report = SimpleNamespace(imported=1, total=4, baseline_path=baseline_path)
+
+    monkeypatch.setattr(
+        cli_module,
+        "import_sample_baseline",
+        lambda **kwargs: calls.append(kwargs) or report,
+    )
+
+    exit_code = cli_module.main(
+        [
+            "import-sample-baseline",
+            "--input",
+            str(input_dir),
+            "--draft",
+            str(draft_path),
+            "--baseline",
+            str(baseline_path),
+        ],
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    assert calls[0]["baseline_path"] == baseline_path
+    assert "\u672c\u6b21\u5bfc\u5165 1 \u6761" in stdout.getvalue()
