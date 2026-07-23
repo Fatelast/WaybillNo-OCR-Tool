@@ -19,6 +19,31 @@ def test_main_window_layout_keeps_task_area_compact_for_log_visibility():
     assert main_window.LOG_SECTION_MIN_HEIGHT == 180
     assert "height=16" in source
     assert "speed_controls = tk.Frame(speed_box, bg=BG_COLOR)" in source
+
+
+def test_button_motion_uses_shared_hover_and_press_feedback():
+    from waybill_ocr.ui import main_window
+
+    source = Path(main_window.__file__).read_text(encoding="utf-8")
+
+    assert main_window._blend_hex_color("#000000", "#FFFFFF", 0.5) == "#808080"
+    assert main_window._darken_hex_color("#808080") == "#717171"
+    assert main_window.BUTTON_MOTION_STEPS == 5
+    assert main_window.BUTTON_MOTION_DELAY_MS == 32
+    assert "self._animate_fill(self._active_fill)" in source
+    assert "self._animate_fill(self._press_fill, steps=2, delay=16)" in source
+    assert "RoundedButton(" in source
+
+
+def test_rounded_menu_buttons_attach_menus_to_inner_controls():
+    from waybill_ocr.ui import main_window
+
+    source = Path(main_window.__file__).read_text(encoding="utf-8")
+
+    assert "menu = tk.Menu(button.control, tearoff=False" in source
+    assert "tk.Menu(self.advanced_tools_button.control, tearoff=False" in source
+    assert "button.configure(menu=menu)" in source
+    assert "self.advanced_tools_button.configure(menu=self.advanced_tools_menu)" in source
     assert "self.speed_menu.grid(row=0, column=1)" in source
     assert "输出目录可不选" in source
     assert "\u9009\u62e9\u6587\u4ef6\uff0c\u4e0d\u662f\u6587\u4ef6\u5939" not in source
@@ -230,7 +255,7 @@ def test_main_window_contains_sample_verify_and_result_entry_labels():
 
     assert "\u6837\u672c\u9a8c\u6536" in source
     assert "\\u6253\\u5f00\\u7ed3\\u679c" in source
-    assert "button = tk.Menubutton(" in source
+    assert "button = RoundedMenubutton(" in source
     assert "progressbar = ttk.Progressbar(" in source
     assert "entry_shell" not in source
     assert "header = tk.Frame(parent, bg=PRIMARY_COLOR, padx=12, pady=10)" in source

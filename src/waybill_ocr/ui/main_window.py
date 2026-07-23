@@ -88,6 +88,9 @@ REVIEW_DISABLED_BG = "#F3F8F6"
 REVIEW_DISABLED_FG = "#91A39E"
 REVIEW_HINT_BG = "#E9F7F2"
 REVIEW_HINT_BORDER = "#C7EADD"
+BUTTON_SHADOW_COLOR = "#D7E6E1"
+BUTTON_MOTION_STEPS = 5
+BUTTON_MOTION_DELAY_MS = 32
 REVIEW_HINT_FG = "#315F58"
 FONT_FAMILY = "Microsoft YaHei UI"
 SPEED_MODE_LABELS = {
@@ -112,6 +115,28 @@ HISTORY_MODE_CANCEL = "cancel"
 
 def _surface_color(widget) -> str:
     return getattr(widget, "surface_color", widget.cget("bg"))
+
+
+def _blend_hex_color(start: str, end: str, progress: float) -> str:
+    if not (start.startswith("#") and end.startswith("#") and len(start) == len(end) == 7):
+        return end
+    progress = min(1.0, max(0.0, progress))
+    start_rgb = tuple(int(start[index : index + 2], 16) for index in (1, 3, 5))
+    end_rgb = tuple(int(end[index : index + 2], 16) for index in (1, 3, 5))
+    channels = tuple(round(first + (second - first) * progress) for first, second in zip(start_rgb, end_rgb))
+    return "#{:02X}{:02X}{:02X}".format(*channels)
+
+
+def _darken_hex_color(color: str, amount: float = 0.12) -> str:
+    return _blend_hex_color(color, "#000000", amount)
+
+
+def _is_descendant_of(widget, ancestor) -> bool:
+    while widget is not None:
+        if widget is ancestor:
+            return True
+        widget = widget.master
+    return False
 
 
 def _draw_rounded_rectangle(
@@ -253,11 +278,18 @@ class _RoundedControl(RoundedPanel):
             outer_bg=_surface_color(master),
             radius=radius,
             border_color=border_color,
+            shadow_color=BUTTON_SHADOW_COLOR,
+            shadow_offset=1,
             padx=2,
             pady=1,
         )
         self._normal_fill = fill
         self._active_fill = active_fill
+        self._visible_fill = fill
+        self._hovered = False
+        self._animation_token = 0
+        self._disabled_foreground = kwargs.get("disabledforeground", "#FFFFFF")
+        self._press_fill = _darken_hex_color(active_fill)
         self.configure(cursor=cursor)
         kwargs.update(
             {
@@ -265,7 +297,7 @@ class _RoundedControl(RoundedPanel):
                 "fg": "#FFFFFF",
                 "activebackground": active_fill,
                 "activeforeground": "#FFFFFF",
-                "disabledforeground": "#FFFFFF",
+                "disabledforeground": self._disabled_foreground,
                 "borderwidth": 0,
                 "highlightthickness": 0,
                 "relief": tk.FLAT,
@@ -274,10 +306,14 @@ class _RoundedControl(RoundedPanel):
         self.control = control_class(self, **kwargs)
         self.control.pack(fill=tk.BOTH, expand=True, padx=3, pady=1)
         self.control.bind("<Enter>", self._show_hover, add="+")
-        self.control.bind("<Leave>", self._hide_hover, add="+")
+        self.control.bind("<Leave>", self._schedule_hide_hover, add="+")
+        self.control.bind("<ButtonPress-1>", self._show_pressed, add="+")
+        self.control.bind("<ButtonRelease-1>", self._restore_after_press, add="+")
         for click_target in (self, self._background_canvas):
             click_target.bind("<Enter>", self._show_hover, add="+")
-            click_target.bind("<Leave>", self._hide_hover, add="+")
+            click_target.bind("<Leave>", self._schedule_hide_hover, add="+")
+            click_target.bind("<ButtonPress-1>", self._show_pressed, add="+")
+            click_target.bind("<ButtonRelease-1>", self._restore_after_press, add="+")
             click_target.bind("<Button-1>", self._invoke_from_surface, add="+")
 
     def configure(self, cnf=None, **kwargs):
@@ -288,19 +324,32 @@ class _RoundedControl(RoundedPanel):
         fill = kwargs.get("bg", kwargs.get("background"))
         if fill is not None:
             self._normal_fill = fill
-            self.set_fill(fill)
+            self._press_fill = _darken_hex_color(self._active_fill)
+            self._apply_fill(fill)
         active_fill = kwargs.get("activebackground")
         if active_fill is not None:
             self._active_fill = active_fill
+            self._press_fill = _darken_hex_color(active_fill)
         if "cursor" in kwargs:
             super().configure(cursor=kwargs["cursor"])
+        state = kwargs.get("state")
+        if str(state) == str(tk.DISABLED) and "fg" in kwargs and "disabledforeground" not in kwargs:
+            kwargs["disabledforeground"] = kwargs["fg"]
         if "fg" in kwargs:
             kwargs["fg"] = "#FFFFFF"
         if "foreground" in kwargs:
             kwargs["foreground"] = "#FFFFFF"
         kwargs["activeforeground"] = "#FFFFFF"
-        kwargs["disabledforeground"] = "#FFFFFF"
-        return self.control.configure(**kwargs)
+        if "disabledforeground" in kwargs:
+            self._disabled_foreground = kwargs["disabledforeground"]
+        else:
+            kwargs["disabledforeground"] = self._disabled_foreground
+        result = self.control.configure(**kwargs)
+        if str(state) == str(tk.DISABLED):
+            self._hovered = False
+            self._animation_token += 1
+            self._apply_fill(self._normal_fill)
+        return result
 
     config = configure
 
@@ -316,12 +365,49 @@ class _RoundedControl(RoundedPanel):
     def invoke(self):
         return self.control.invoke()
 
-    def _show_hover(self, _event=None) -> None:
-        if str(self.control.cget("state")) != str(tk.DISABLED):
-            self.set_fill(self._active_fill)
+    def _apply_fill(self, fill: str) -> None:
+        self._visible_fill = fill
+        self.set_fill(fill)
+        self.control.configure(bg=fill)
 
-    def _hide_hover(self, _event=None) -> None:
-        self.set_fill(self._normal_fill)
+    def _animate_fill(self, target: str, *, steps: int = BUTTON_MOTION_STEPS, delay: int = BUTTON_MOTION_DELAY_MS) -> None:
+        self._animation_token += 1
+        token = self._animation_token
+        start = self._visible_fill
+
+        def render(step: int) -> None:
+            if token != self._animation_token:
+                return
+            self._apply_fill(_blend_hex_color(start, target, step / steps))
+            if step < steps:
+                self.after(delay, lambda: render(step + 1))
+
+        render(1)
+
+    def _show_hover(self, _event=None) -> None:
+        if str(self.control.cget("state")) == str(tk.DISABLED):
+            return
+        self._hovered = True
+        self._animate_fill(self._active_fill)
+
+    def _schedule_hide_hover(self, _event=None) -> None:
+        self.after(12, self._hide_hover_if_pointer_left)
+
+    def _hide_hover_if_pointer_left(self) -> None:
+        pointed_widget = self.winfo_containing(self.winfo_pointerx(), self.winfo_pointery())
+        if _is_descendant_of(pointed_widget, self):
+            return
+        self._hovered = False
+        self._animate_fill(self._normal_fill)
+
+    def _show_pressed(self, _event=None) -> None:
+        if str(self.control.cget("state")) != str(tk.DISABLED):
+            self._animate_fill(self._press_fill, steps=2, delay=16)
+
+    def _restore_after_press(self, _event=None) -> None:
+        if str(self.control.cget("state")) == str(tk.DISABLED):
+            return
+        self._animate_fill(self._active_fill if self._hovered else self._normal_fill)
 
     def _invoke_from_surface(self, _event=None) -> None:
         if str(self.control.cget("state")) != str(tk.DISABLED):
@@ -350,6 +436,10 @@ class RoundedOptionMenu(RoundedPanel):
             padx=2,
             pady=1,
         )
+        self._normal_fill = INPUT_BG
+        self._active_fill = SURFACE_MUTED
+        self._visible_fill = INPUT_BG
+        self._animation_token = 0
         self.control = tk.OptionMenu(self, variable, *values, command=command)
         self.control.configure(
             bg=INPUT_BG,
@@ -360,6 +450,12 @@ class RoundedOptionMenu(RoundedPanel):
             highlightthickness=0,
             relief=tk.FLAT,
         )
+        self.control.bind("<Enter>", self._show_hover, add="+")
+        self.control.bind("<Leave>", self._schedule_hide_hover, add="+")
+        for hover_target in (self, self._background_canvas):
+            hover_target.bind("<Enter>", self._show_hover, add="+")
+            hover_target.bind("<Leave>", self._schedule_hide_hover, add="+")
+
         self.control.pack(fill=tk.BOTH, expand=True, padx=3, pady=1)
 
     def configure(self, cnf=None, **kwargs):
@@ -367,8 +463,47 @@ class RoundedOptionMenu(RoundedPanel):
             kwargs.update(cnf)
         fill = kwargs.get("bg", kwargs.get("background"))
         if fill is not None:
-            self.set_fill(fill)
-        return self.control.configure(**kwargs)
+            self._normal_fill = fill
+            self._apply_fill(fill)
+        if "cursor" in kwargs:
+            super().configure(cursor=kwargs["cursor"])
+        state = kwargs.get("state")
+        result = self.control.configure(**kwargs)
+        if str(state) == str(tk.DISABLED):
+            self._animation_token += 1
+            self._apply_fill(self._normal_fill)
+        return result
+
+    def _apply_fill(self, fill: str) -> None:
+        self._visible_fill = fill
+        self.set_fill(fill)
+        self.control.configure(bg=fill)
+
+    def _animate_fill(self, target: str) -> None:
+        self._animation_token += 1
+        token = self._animation_token
+        start = self._visible_fill
+
+        def render(step: int) -> None:
+            if token != self._animation_token:
+                return
+            self._apply_fill(_blend_hex_color(start, target, step / BUTTON_MOTION_STEPS))
+            if step < BUTTON_MOTION_STEPS:
+                self.after(BUTTON_MOTION_DELAY_MS, lambda: render(step + 1))
+
+        render(1)
+
+    def _show_hover(self, _event=None) -> None:
+        if str(self.control.cget("state")) != str(tk.DISABLED):
+            self._animate_fill(self._active_fill)
+
+    def _schedule_hide_hover(self, _event=None) -> None:
+        self.after(12, self._hide_hover_if_pointer_left)
+
+    def _hide_hover_if_pointer_left(self) -> None:
+        pointed_widget = self.winfo_containing(self.winfo_pointerx(), self.winfo_pointery())
+        if not _is_descendant_of(pointed_widget, self):
+            self._animate_fill(self._normal_fill)
 
     config = configure
 
@@ -742,7 +877,7 @@ class MainWindow:
                 fg=TEXT_COLOR,
                 font=(FONT_FAMILY, 8, "bold"),
             ).grid(row=0, column=0, sticky=tk.W)
-            review_button = tk.Button(
+            review_button = RoundedButton(
                 completion_panel,
                 text="\u67e5\u770b\u5f85\u786e\u8ba4",
                 command=lambda task_index=index: self._open_review_dialog(task_index),
@@ -757,7 +892,7 @@ class MainWindow:
             )
             review_button.grid(row=0, column=1, padx=(6, 3))
             review_button.grid_remove()
-            safe_organize_button = tk.Button(
+            safe_organize_button = RoundedButton(
                 completion_panel,
                 text="安全整理（0）",
                 command=lambda task_index=index: self._auto_confirm_expected(task_index),
@@ -772,7 +907,7 @@ class MainWindow:
             )
             safe_organize_button.grid(row=0, column=2, padx=3)
             safe_organize_button.grid_remove()
-            tk.Button(
+            RoundedButton(
                 completion_panel,
                 text="\u6b63\u786e\u8bc6\u522b",
                 command=lambda task_index=index: self._open_output_path(task_index, "success"),
@@ -785,7 +920,7 @@ class MainWindow:
                 pady=4,
                 font=(FONT_FAMILY, 8, "bold"),
             ).grid(row=0, column=3, padx=3)
-            tk.Button(
+            RoundedButton(
                 completion_panel,
                 text="\u8f93\u51fa\u76ee\u5f55",
                 command=lambda task_index=index: self._open_output_path(task_index, "output"),
@@ -850,7 +985,7 @@ class MainWindow:
         self.task_rows[1]["task_frame"].grid_remove()
         controls = tk.Frame(section, bg=BG_COLOR)
         controls.grid(row=MAX_TASKS, column=0, sticky=tk.EW, pady=(0, 8))
-        self.task_two_toggle_button = tk.Button(
+        self.task_two_toggle_button = RoundedButton(
             controls,
             text="+ \u6dfb\u52a0\u7b2c\u4e8c\u7ec4\u4efb\u52a1",
             command=self._toggle_task_two,
@@ -899,7 +1034,7 @@ class MainWindow:
             highlightthickness=1,
         )
         entry.grid(row=row, column=1, sticky=tk.EW, padx=(8, 8), pady=2, ipady=2)
-        button = tk.Button(
+        button = RoundedButton(
             parent,
             text="浏览",
             command=command,
@@ -932,7 +1067,7 @@ class MainWindow:
 
 
     def _build_result_menu(self, parent: tk.Frame, task_index: int) -> tk.Menubutton:
-        button = tk.Menubutton(
+        button = RoundedMenubutton(
             parent,
             text="\u6253\u5f00\u7ed3\u679c",
             bg=BUTTON_BROWSE,
@@ -947,7 +1082,7 @@ class MainWindow:
             font=(FONT_FAMILY, 8, "bold"),
             state=tk.DISABLED,
         )
-        menu = tk.Menu(button, tearoff=False, font=(FONT_FAMILY, 8))
+        menu = tk.Menu(button.control, tearoff=False, font=(FONT_FAMILY, 8))
         menu.add_command(label="\u8f93\u51fa\u6587\u4ef6\u5939", command=lambda: self._open_output_path(task_index, "output"))
         menu.add_command(label="\u8bc6\u522b\u7ed3\u679c.xlsx", command=lambda: self._open_output_path(task_index, "excel"))
         menu.add_separator()
@@ -989,7 +1124,7 @@ class MainWindow:
             fg=MUTED_TEXT_COLOR,
             font=(FONT_FAMILY, 8),
         ).grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.speed_menu = tk.OptionMenu(
+        self.speed_menu = RoundedOptionMenu(
             speed_controls,
             self.speed_mode_var,
             SPEED_MODE_LABELS[OCR_SPEED_STABLE],
@@ -1020,7 +1155,7 @@ class MainWindow:
             font=(FONT_FAMILY, 8),
             anchor=tk.W,
         ).grid(row=1, column=0, sticky=tk.W, pady=(3, 0))
-        self.advanced_tools_button = tk.Menubutton(
+        self.advanced_tools_button = RoundedMenubutton(
             button_box,
             text="高级工具",
             bg=BUTTON_SAMPLE,
@@ -1034,12 +1169,12 @@ class MainWindow:
             pady=8,
             font=(FONT_FAMILY, 9, "bold"),
         )
-        self.advanced_tools_menu = tk.Menu(self.advanced_tools_button, tearoff=False, font=(FONT_FAMILY, 8))
+        self.advanced_tools_menu = tk.Menu(self.advanced_tools_button.control, tearoff=False, font=(FONT_FAMILY, 8))
         self.advanced_tools_menu.add_command(label="环境检查", command=self._run_environment_check)
         self.advanced_tools_menu.add_command(label="导出诊断信息", command=self._export_diagnostics)
         self.advanced_tools_button.configure(menu=self.advanced_tools_menu)
         self.advanced_tools_button.grid(row=0, column=1, padx=(0, 8))
-        self.start_button = tk.Button(
+        self.start_button = RoundedButton(
             button_box,
             text="开始处理",
             command=self._start,
@@ -1054,7 +1189,7 @@ class MainWindow:
             font=(FONT_FAMILY, 9, "bold"),
         )
         self.start_button.grid(row=0, column=2, padx=(0, 8))
-        self.stop_button = tk.Button(
+        self.stop_button = RoundedButton(
             button_box,
             text="停止处理",
             command=self._stop,
@@ -2040,7 +2175,7 @@ class MainWindow:
             self._enable_output_buttons()
             self._show_completion_panels()
 
-        tk.Button(
+        RoundedButton(
             controls,
             text="全选可整理项",
             command=select_all,
@@ -2052,7 +2187,7 @@ class MainWindow:
             font=(FONT_FAMILY, 9),
             cursor="hand2",
         ).grid(row=0, column=1, padx=(8, 4))
-        tk.Button(
+        RoundedButton(
             controls,
             text="取消全选",
             command=clear_all,
@@ -2064,7 +2199,7 @@ class MainWindow:
             font=(FONT_FAMILY, 9),
             cursor="hand2",
         ).grid(row=0, column=2, padx=4)
-        tk.Button(
+        RoundedButton(
             controls,
             text="整理已确认文件",
             command=confirm_selected,
@@ -2272,7 +2407,7 @@ class MainWindow:
 
         actions = tk.Frame(body, bg=SURFACE_COLOR)
         actions.pack(fill=tk.X, pady=(16, 0))
-        primary = tk.Button(
+        primary = RoundedButton(
             actions,
             text="继续未完成文件（推荐）",
             command=lambda: choose(HISTORY_MODE_RESUME),
@@ -2287,7 +2422,7 @@ class MainWindow:
             font=(FONT_FAMILY, 9, "bold"),
         )
         primary.pack(side=tk.LEFT)
-        tk.Button(
+        RoundedButton(
             actions,
             text="重新识别当前输入内全部文件",
             command=lambda: choose(HISTORY_MODE_REPROCESS),
@@ -2301,7 +2436,7 @@ class MainWindow:
             pady=8,
             font=(FONT_FAMILY, 9),
         ).pack(side=tk.LEFT, padx=(8, 0))
-        tk.Button(
+        RoundedButton(
             actions,
             text="取消",
             command=lambda: choose(HISTORY_MODE_CANCEL),
