@@ -3,6 +3,7 @@ from pathlib import Path
 from waybill_ocr.review_confirmation import (
     auto_confirm_expected_candidates,
     confirm_review_candidates,
+    expected_review_candidates,
     scan_review_candidates,
 )
 
@@ -118,3 +119,13 @@ def test_auto_confirm_expected_codes_leaves_duplicate_expected_candidates(tmp_pa
     assert summary.moved_count == 0
     assert first.exists()
     assert second.exists()
+
+
+def test_expected_review_candidates_uses_same_safe_filter_as_auto_confirm(tmp_path: Path):
+    output_dir = tmp_path / "output"
+    _write_review_file(output_dir, "未识别", f"{VALID_CODE}-待确认.pdf")
+    _write_review_file(output_dir, "箱号错误", "GESU5903361-待确认.pdf")
+
+    candidates = expected_review_candidates(output_dir, [VALID_CODE, "GESU5903361"])
+
+    assert [candidate.review_code for candidate in candidates] == [VALID_CODE]

@@ -14,7 +14,7 @@ def test_main_window_layout_keeps_task_area_compact_for_log_visibility():
 
     assert "progress_cell" in source
     assert "height=24" in source
-    assert "\u8f93\u5165\u6587\u4ef6\u5939\u540d_\u8bc6\u522b\u8f93\u51fa" in source
+    assert "输出目录可不选" in source
     assert "\u9009\u62e9\u6587\u4ef6\uff0c\u4e0d\u662f\u6587\u4ef6\u5939" not in source
     assert "\\u975e\\u5fc5\\u9009" not in source
     assert "\\u9884\\u671f\\u7bb1\\u53f7\\u6e05\\u5355\\uff08\\u53ef\\u9009\\uff09" in source
@@ -219,6 +219,7 @@ def test_expected_status_preview_shows_sample_codes(monkeypatch):
 
 
 def test_main_window_contains_sample_verify_and_result_entry_labels():
+    from waybill_ocr.ui import main_window
     source = (Path(__file__).resolve().parents[1] / "src" / "waybill_ocr" / "ui" / "main_window.py").read_text(encoding="utf-8")
 
     assert "\u6837\u672c\u9a8c\u6536" in source
@@ -229,4 +230,255 @@ def test_main_window_contains_sample_verify_and_result_entry_labels():
     assert "\\u672a\\u8bc6\\u522b" in source
     assert "\\u7bb1\\u53f7\\u9519\\u8bef" in source
     assert "result_buttons" not in source
-    assert "\u590d\u7528\u5386\u53f2\u7ed3\u679c" in source
+    assert "继续未完成文件（推荐）" in source
+    assert "重新识别当前输入内全部文件" in source
+    assert "result_menu_button.grid_remove()" in source
+    assert main_window.LOG_PLACEHOLDER in source
+
+
+
+def test_collapsed_second_task_is_not_collected(monkeypatch):
+    from waybill_ocr.ui import main_window
+
+    input_one = Path("D:/OCRTool/test-parent/input-one")
+    input_two = Path("D:/OCRTool/test-parent/input-two")
+    rows = [_task_row(input_path=input_one), _task_row(input_path=input_two)]
+    errors = []
+    existing_dirs = {input_one, input_two}
+    monkeypatch.setattr(main_window.messagebox, "showerror", lambda title, message: errors.append((title, message)))
+    monkeypatch.setattr(main_window.Path, "is_dir", lambda self: self in existing_dirs)
+    window = SimpleNamespace(task_rows=rows, task_two_expanded=False)
+
+    tasks = main_window.MainWindow._collect_tasks(window)
+
+    assert errors == []
+    assert tasks is not None
+    assert len(tasks) == 1
+    assert tasks[0].input_dir == input_one
+
+
+def test_default_output_suggestion_preserves_manual_output():
+    from waybill_ocr.ui import main_window
+
+    first_input = Path("D:/OCRTool/test-parent/input-one")
+    second_input = Path("D:/OCRTool/test-parent/input-two")
+    manual_output = Path("D:/OCRTool/test-parent/manual-output")
+    row = _task_row()
+    row["auto_output_dir"] = None
+    window = SimpleNamespace(task_rows=[row])
+
+    suggested = main_window.MainWindow._set_default_output_for_input(window, 0, first_input)
+    assert suggested == first_input.parent / "input-one_\u8bc6\u522b\u8f93\u51fa"
+    assert row["output_var"].get() == str(suggested)
+
+    row["output_var"].set(str(manual_output))
+    row["auto_output_dir"] = None
+    selected = main_window.MainWindow._set_default_output_for_input(window, 0, second_input)
+
+    assert selected == manual_output
+    assert row["output_var"].get() == str(manual_output)
+
+
+def test_completion_summary_combines_review_counts():
+    from waybill_ocr.ui import main_window
+
+    state = {
+        "success": 8,
+        "unrecognized": 2,
+        "invalid": 1,
+        "started_at": 10.0,
+        "finished_at": 75.0,
+    }
+
+    assert main_window._completion_summary(state) == "\u5904\u7406\u7ed3\u675f\uff1a\u6210\u529f 8 | \u5f85\u590d\u6838 3 | \u7528\u65f6 01:05"
+
+
+def test_main_window_keeps_expected_list_visible_and_removes_duplicate_review_entry():
+    from waybill_ocr.ui import main_window
+
+    source = Path(main_window.__file__).read_text(encoding="utf-8")
+
+    assert "task_two_toggle_button" in source
+    assert "advanced_toggle_button" not in source
+    assert "advanced_panel" not in source
+    assert "expected_status_label.grid_remove()" not in source
+    assert "\\u6279\\u91cf\\u786e\\u8ba4\\u5e76\\u6574\\u7406" not in source
+
+class FakeWidget:
+    def __init__(self) -> None:
+        self.options = {}
+        self.visible = False
+
+    def config(self, **kwargs) -> None:
+        self.options.update(kwargs)
+
+    def grid(self, **_kwargs) -> None:
+        self.visible = True
+
+    def grid_remove(self) -> None:
+        self.visible = False
+
+
+def _ready_task_row(
+    input_path: Path | str = "",
+    output_path: Path | str = "",
+    expected_path: Path | str = "",
+    *,
+    input_ready: bool = False,
+    supported_file_count: int = 0,
+    output_valid: bool = True,
+    expected_valid: bool = True,
+):
+    row = _task_row(input_path, output_path, expected_path)
+    row.update(
+        {
+            "input_ready": input_ready,
+            "supported_file_count": supported_file_count,
+            "output_valid": output_valid,
+            "expected_valid": expected_valid,
+            "output_status_var": FakeVar(),
+            "output_status_label": FakeWidget(),
+        }
+    )
+    return row
+
+
+def test_start_readiness_requires_a_scanned_supported_file():
+    from waybill_ocr.ui.main_window import _tasks_ready_for_start
+
+    row = _ready_task_row("D:/input", "D:/output")
+    assert not _tasks_ready_for_start([row], task_two_expanded=False)
+
+    row["input_ready"] = True
+    row["supported_file_count"] = 1
+    assert _tasks_ready_for_start([row], task_two_expanded=False)
+
+
+def test_start_readiness_ignores_collapsed_second_task_but_checks_it_when_expanded():
+    from waybill_ocr.ui.main_window import _tasks_ready_for_start
+
+    first = _ready_task_row(
+        "D:/input-one",
+        "D:/output-one",
+        input_ready=True,
+        supported_file_count=2,
+    )
+    incomplete_second = _ready_task_row(output_path="D:/output-two")
+
+    assert _tasks_ready_for_start([first, incomplete_second], task_two_expanded=False)
+    assert not _tasks_ready_for_start([first, incomplete_second], task_two_expanded=True)
+
+
+def test_duplicate_output_paths_are_reported_inline(tmp_path: Path):
+    from types import MethodType
+
+    import tkinter as tk
+
+    from waybill_ocr.ui import main_window
+
+    input_one = tmp_path / "input-one"
+    input_two = tmp_path / "input-two"
+    shared_output = tmp_path / "shared-output"
+    input_one.mkdir()
+    input_two.mkdir()
+    rows = [
+        _ready_task_row(input_one, shared_output, input_ready=True, supported_file_count=1),
+        _ready_task_row(input_two, shared_output, input_ready=True, supported_file_count=1),
+    ]
+    start_button = FakeWidget()
+    window = SimpleNamespace(
+        task_rows=rows,
+        task_two_expanded=True,
+        running=False,
+        start_button=start_button,
+    )
+    window._set_output_error = MethodType(main_window.MainWindow._set_output_error, window)
+    window._refresh_start_button_state = MethodType(main_window.MainWindow._refresh_start_button_state, window)
+
+    main_window.MainWindow._validate_output_paths(window)
+
+    assert all(not row["output_valid"] for row in rows)
+    assert all(row["output_status_label"].visible for row in rows)
+    assert all("\u8f93\u51fa\u6587\u4ef6\u5939\u4e0d\u80fd\u76f8\u540c" in row["output_status_var"].get() for row in rows)
+    assert start_button.options["state"] == tk.DISABLED
+
+
+def test_expected_list_hint_explains_that_results_are_not_overwritten():
+    from waybill_ocr.ui import main_window
+
+    assert "\u4ec5\u7528\u4e8e\u6838\u5bf9\u7f3a\u5931" in main_window.EXPECTED_LIST_HINT
+    assert "\u4e0d\u4f1a\u8986\u76d6\u8bc6\u522b\u7ed3\u679c" in main_window.EXPECTED_LIST_HINT
+
+
+def test_start_readiness_reports_scanning_empty_invalid_and_ready_states():
+    from waybill_ocr.ui.main_window import _start_readiness_state
+
+    row = _ready_task_row("D:/input", "D:/output")
+    row["input_scanning"] = True
+    ready, message = _start_readiness_state([row], task_two_expanded=False)
+    assert not ready
+    assert "正在检查任务 1" in message
+
+    row["input_scanning"] = False
+    row["last_scanned_input"] = "D:/input"
+    ready, message = _start_readiness_state([row], task_two_expanded=False)
+    assert not ready
+    assert "未发现可处理文件" in message
+
+    row["input_ready"] = True
+    row["supported_file_count"] = 3
+    row["expected_valid"] = False
+    ready, message = _start_readiness_state([row], task_two_expanded=False)
+    assert not ready
+    assert "红色提示" in message
+
+    row["expected_valid"] = True
+    ready, message = _start_readiness_state([row], task_two_expanded=False)
+    assert ready
+    assert "准备就绪，共 3 个文件" in message
+
+
+def test_existing_result_outputs_only_returns_tasks_with_workbooks(tmp_path: Path):
+    from waybill_ocr.constants import RESULT_WORKBOOK_NAME
+    from waybill_ocr.ui.main_window import _existing_result_outputs
+    from waybill_ocr.ui.task_runner import DirectoryTask
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / RESULT_WORKBOOK_NAME).write_bytes(b"xlsx")
+    tasks = [
+        DirectoryTask(tmp_path / "input-one", first, "task one"),
+        DirectoryTask(tmp_path / "input-two", second, "task two"),
+    ]
+
+    assert _existing_result_outputs(tasks) == [first]
+
+
+def test_safe_organize_button_uses_shared_candidate_count(tmp_path: Path):
+    from waybill_ocr.ui import main_window
+    from waybill_ocr.ui.task_runner import DirectoryTask
+
+    output_dir = tmp_path / "output"
+    review_dir = output_dir / "未识别"
+    review_dir.mkdir(parents=True)
+    (review_dir / "GESU5903360-待确认.pdf").write_bytes(b"pdf")
+    expected_path = tmp_path / "expected.txt"
+    expected_path.write_text("GESU5903360\n", encoding="utf-8")
+    button = FakeWidget()
+    row = {"safe_organize_button": button}
+    task = DirectoryTask(tmp_path / "input", output_dir, "task", expected_path)
+    window = SimpleNamespace(task_rows=[row], active_tasks=[task])
+
+    main_window.MainWindow._refresh_safe_organize_button(window, 0, output_dir)
+
+    assert button.visible
+    assert button.options["text"] == "安全整理（1）"
+
+    invalid_dir = output_dir / "箱号错误"
+    invalid_dir.mkdir()
+    (invalid_dir / "GESU5903360-待确认-1.pdf").write_bytes(b"pdf")
+    main_window.MainWindow._refresh_safe_organize_button(window, 0, output_dir)
+
+    assert not button.visible

@@ -17,6 +17,7 @@ from waybill_ocr.config import (
 from waybill_ocr.constants import INVALID_DIR_NAME, RESULT_WORKBOOK_NAME, SUCCESS_DIR_NAME, UNRECOGNIZED_DIR_NAME
 from waybill_ocr.container_code.expected_codes import inspect_expected_codes, read_expected_codes
 from waybill_ocr.delivery import APP_NAME, CURRENT_VERSION
+from waybill_ocr.file_scanner import scan_input_files
 from waybill_ocr.diagnostics import format_diagnostic_messages, inspect_environment
 from waybill_ocr.models import RecognitionStatus
 from waybill_ocr.ocr.tesseract_engine import TesseractEngine
@@ -24,6 +25,7 @@ from waybill_ocr.sample_verifier import resolve_default_baseline_path, verify_sa
 from waybill_ocr.review_confirmation import (
     auto_confirm_expected_candidates,
     confirm_review_candidates,
+    expected_review_candidates,
     scan_review_candidates,
 )
 from waybill_ocr.ui.preferences import load_preferences, save_preferences
@@ -60,6 +62,14 @@ SPEED_MODE_DESCRIPTIONS = {
     OCR_SPEED_BALANCED: "默认推荐；兼顾速度和准确率，会对失败件做有限复核。",
     OCR_SPEED_FAST: "适合清晰文件快速粗筛；失败件会保留待确认，不做深度复核。",
 }
+EXPECTED_LIST_HINT = (
+    "\u9884\u671f\u6e05\u5355\uff1a\u53ef\u9009\uff1b\u4ec5\u7528\u4e8e\u6838\u5bf9\u7f3a\u5931\uff0c\u4e0d\u4f1a\u8986\u76d6\u8bc6\u522b\u7ed3\u679c\uff1b"
+    "\u652f\u6301 .txt / .csv / .xlsx\u3002"
+)
+HISTORY_MODE_RESUME = "resume"
+HISTORY_MODE_REPROCESS = "reprocess"
+HISTORY_MODE_CANCEL = "cancel"
+LOG_PLACEHOLDER = "等待开始处理，识别进度和异常会显示在这里。"
 
 
 
@@ -71,8 +81,10 @@ class MainWindow:
         self.root.minsize(920, 680)
         self.root.configure(bg=BG_COLOR)
 
+        self.task_two_expanded = False
         self.task_rows = []
         self.progress_var = tk.StringVar(value="待处理")
+        self.action_hint_var = tk.StringVar(value="请选择任务 1 输入文件夹；输出目录可不选。")
         self.speed_mode_var = tk.StringVar(value=SPEED_MODE_LABELS[OCR_SPEED_BALANCED])
         self.speed_description_var = tk.StringVar(value=_speed_mode_description(OCR_SPEED_BALANCED))
         self.running = False
@@ -156,6 +168,7 @@ class MainWindow:
 
     def _build_task_section(self, parent: tk.Frame) -> None:
         section = tk.Frame(parent, bg=BG_COLOR)
+        self.task_section = section
         section.grid(row=1, column=0, sticky=tk.EW, pady=(8, 0))
         section.columnconfigure(0, weight=1)
 
@@ -223,33 +236,57 @@ class MainWindow:
 
             result_menu_button = self._build_result_menu(task_frame, index)
             result_menu_button.grid(row=0, column=2, sticky=tk.E, pady=(0, 4))
+            result_menu_button.grid_remove()
 
 
-            input_entry, input_button = self._build_path_field(
+            input_label, input_entry, input_button = self._build_path_field(
                 task_frame,
                 1,
                 "\u8f93\u5165\u6587\u4ef6\u5939",
                 input_var,
                 lambda task_index=index: self._choose_input(task_index),
             )
-            output_entry, output_button = self._build_path_field(
+            input_status_var = tk.StringVar()
+            input_status_label = tk.Label(
                 task_frame,
-                2,
+                textvariable=input_status_var,
+                bg=SURFACE_COLOR,
+                fg=MUTED_TEXT_COLOR,
+                font=(FONT_FAMILY, 8),
+                anchor=tk.W,
+            )
+            input_status_label.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 1))
+
+            input_status_label.grid_remove()
+            output_label, output_entry, output_button = self._build_path_field(
+                task_frame,
+                3,
                 "\u8f93\u51fa\u6587\u4ef6\u5939\uff08\u53ef\u9009\uff09",
                 output_var,
                 lambda task_index=index: self._choose_output(task_index),
             )
-            expected_entry, expected_button = self._build_path_field(
+            output_status_var = tk.StringVar()
+            output_status_label = tk.Label(
                 task_frame,
-                3,
+                textvariable=output_status_var,
+                bg=SURFACE_COLOR,
+                fg=DANGER_COLOR,
+                font=(FONT_FAMILY, 8),
+                anchor=tk.W,
+            )
+            output_status_label.grid(row=4, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 1))
+            output_status_label.grid_remove()
+
+
+            expected_label, expected_entry, expected_button = self._build_path_field(
+                task_frame,
+                5,
                 "\u9884\u671f\u7bb1\u53f7\u6e05\u5355\uff08\u53ef\u9009\uff09",
                 expected_var,
                 lambda task_index=index: self._choose_expected(task_index),
             )
 
-            expected_status_var = tk.StringVar(
-                value="\u9884\u671f\u6e05\u5355\uff1a\u53ef\u9009\uff1b\u652f\u6301 .txt / .csv / .xlsx\uff1b\u5efa\u8bae\u6bcf\u884c\u4e00\u4e2a\u7bb1\u53f7\u3002"
-            )
+            expected_status_var = tk.StringVar(value=EXPECTED_LIST_HINT)
             expected_status_label = tk.Label(
                 task_frame,
                 textvariable=expected_status_var,
@@ -258,27 +295,136 @@ class MainWindow:
                 font=(FONT_FAMILY, 8),
                 anchor=tk.W,
             )
-            expected_status_label.grid(row=4, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 1))
+            expected_status_label.grid(row=6, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 1))
+
+            completion_summary_var = tk.StringVar()
+            completion_panel = tk.Frame(task_frame, bg="#eff6ff", padx=8, pady=6)
+            completion_panel.grid(row=7, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))
+            completion_panel.columnconfigure(0, weight=1)
+            tk.Label(
+                completion_panel,
+                textvariable=completion_summary_var,
+                bg="#eff6ff",
+                fg=TEXT_COLOR,
+                font=(FONT_FAMILY, 8, "bold"),
+            ).grid(row=0, column=0, sticky=tk.W)
+            tk.Button(
+                completion_panel,
+                text="\u67e5\u770b\u5f85\u786e\u8ba4",
+                command=lambda task_index=index: self._open_review_dialog(task_index),
+                bg=SURFACE_COLOR,
+                fg=PRIMARY_COLOR,
+                relief=tk.FLAT,
+                cursor="hand2",
+                padx=9,
+                pady=4,
+                font=(FONT_FAMILY, 8, "bold"),
+            ).grid(row=0, column=1, padx=(6, 3))
+            safe_organize_button = tk.Button(
+                completion_panel,
+                text="安全整理（0）",
+                command=lambda task_index=index: self._auto_confirm_expected(task_index),
+                bg="#dcfce7",
+                fg="#166534",
+                relief=tk.FLAT,
+                cursor="hand2",
+                padx=9,
+                pady=4,
+                font=(FONT_FAMILY, 8, "bold"),
+            )
+            safe_organize_button.grid(row=0, column=2, padx=3)
+            safe_organize_button.grid_remove()
+            tk.Button(
+                completion_panel,
+                text="\u6b63\u786e\u8bc6\u522b",
+                command=lambda task_index=index: self._open_output_path(task_index, "success"),
+                bg=SURFACE_COLOR,
+                fg=PRIMARY_COLOR,
+                relief=tk.FLAT,
+                cursor="hand2",
+                padx=9,
+                pady=4,
+                font=(FONT_FAMILY, 8, "bold"),
+            ).grid(row=0, column=3, padx=3)
+            tk.Button(
+                completion_panel,
+                text="\u8f93\u51fa\u76ee\u5f55",
+                command=lambda task_index=index: self._open_output_path(task_index, "output"),
+                bg=PRIMARY_COLOR,
+                fg="#ffffff",
+                relief=tk.FLAT,
+                cursor="hand2",
+                padx=9,
+                pady=4,
+                font=(FONT_FAMILY, 8, "bold"),
+            ).grid(row=0, column=4, padx=(3, 0))
+            completion_panel.grid_remove()
 
             self.task_rows.append(
                 {
+                    "task_frame": task_frame,
                     "input_var": input_var,
                     "output_var": output_var,
                     "expected_var": expected_var,
                     "expected_status_var": expected_status_var,
                     "expected_status_label": expected_status_label,
+                    "input_status_var": input_status_var,
+                    "input_status_label": input_status_label,
+                    "output_status_var": output_status_var,
+                    "output_status_label": output_status_label,
                     "progress_text_var": progress_text_var,
                     "summary_var": summary_var,
                     "progressbar": progressbar,
                     "result_menu_button": result_menu_button,
+                    "completion_summary_var": completion_summary_var,
+                    "completion_panel": completion_panel,
+                    "safe_organize_button": safe_organize_button,
+                    "input_label": input_label,
+                    "output_label": output_label,
+                    "expected_label": expected_label,
                     "input_entry": input_entry,
                     "output_entry": output_entry,
                     "expected_entry": expected_entry,
                     "input_button": input_button,
                     "output_button": output_button,
                     "expected_button": expected_button,
+                    "auto_output_dir": None,
+                    "last_scanned_input": None,
+                    "scan_generation": 0,
+                    "input_scanning": False,
+                    "input_ready": False,
+                    "supported_file_count": 0,
+                    "output_valid": True,
+                    "expected_valid": True,
                 }
             )
+
+            input_entry.bind("<Return>", lambda _event, task_index=index: self._input_path_changed(task_index))
+            input_entry.bind("<FocusOut>", lambda _event, task_index=index: self._input_path_changed(task_index))
+
+            output_entry.bind("<Return>", lambda _event, task_index=index: self._output_path_changed(task_index))
+            output_entry.bind("<FocusOut>", lambda _event, task_index=index: self._output_path_changed(task_index))
+            expected_entry.bind("<Return>", lambda _event, task_index=index: self._expected_path_changed(task_index))
+            expected_entry.bind("<FocusOut>", lambda _event, task_index=index: self._expected_path_changed(task_index))
+        self.task_rows[1]["task_frame"].grid_remove()
+        controls = tk.Frame(section, bg=BG_COLOR)
+        controls.grid(row=MAX_TASKS, column=0, sticky=tk.EW, pady=(0, 6))
+        self.task_two_toggle_button = tk.Button(
+            controls,
+            text="+ \u6dfb\u52a0\u7b2c\u4e8c\u7ec4\u4efb\u52a1",
+            command=self._toggle_task_two,
+            bg="#eef4ff",
+            fg=PRIMARY_COLOR,
+            activebackground="#dbeafe",
+            activeforeground=PRIMARY_HOVER,
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=12,
+            pady=5,
+            font=(FONT_FAMILY, 8, "bold"),
+        )
+        self.task_two_toggle_button.grid(row=0, column=0, sticky=tk.W)
+
 
 
     def _build_path_field(
@@ -288,8 +434,8 @@ class MainWindow:
         label_text: str,
         variable: tk.StringVar,
         command,
-    ) -> tuple[tk.Entry, tk.Button]:
-        tk.Label(
+    ) -> tuple[tk.Label, tk.Entry, tk.Button]:
+        label = tk.Label(
             parent,
             text=label_text,
             bg=SURFACE_COLOR,
@@ -297,7 +443,8 @@ class MainWindow:
             font=(FONT_FAMILY, 8),
             width=16,
             anchor=tk.W,
-        ).grid(row=row, column=0, sticky=tk.W, pady=2)
+        )
+        label.grid(row=row, column=0, sticky=tk.W, pady=2)
 
         entry = tk.Entry(
             parent,
@@ -328,7 +475,22 @@ class MainWindow:
             font=(FONT_FAMILY, 8, "bold"),
         )
         button.grid(row=row, column=2, sticky=tk.E, pady=3)
-        return entry, button
+        return label, entry, button
+
+    def _toggle_task_two(self) -> None:
+        if self.running:
+            return
+        self.task_two_expanded = not self.task_two_expanded
+        task_frame = self.task_rows[1]["task_frame"]
+        if self.task_two_expanded:
+            task_frame.grid()
+            self.task_two_toggle_button.config(text="\u6536\u8d77\u4efb\u52a1 2")
+        else:
+            task_frame.grid_remove()
+            self.task_two_toggle_button.config(text="+ \u6dfb\u52a0\u7b2c\u4e8c\u7ec4\u4efb\u52a1")
+        self._validate_output_paths()
+
+
 
     def _build_result_menu(self, parent: tk.Frame, task_index: int) -> tk.Menubutton:
         button = tk.Menubutton(
@@ -355,7 +517,6 @@ class MainWindow:
         menu.add_command(label="\u7bb1\u53f7\u9519\u8bef", command=lambda: self._open_output_path(task_index, "invalid"))
         menu.add_separator()
         menu.add_command(label="\u5f85\u786e\u8ba4\u6587\u4ef6", command=lambda: self._open_review_dialog(task_index))
-        menu.add_command(label="\u6279\u91cf\u786e\u8ba4\u5e76\u6574\u7406", command=lambda: self._open_review_dialog(task_index))
         menu.add_command(label="\u6309\u9884\u671f\u6e05\u5355\u81ea\u52a8\u6574\u7406", command=lambda: self._auto_confirm_expected(task_index))
         menu.add_separator()
         menu.add_command(label="\u5931\u8d25\u6587\u4ef6\u91cd\u65b0\u8bc6\u522b", command=lambda: self._retry_failed_files(task_index))
@@ -369,7 +530,7 @@ class MainWindow:
 
         hint = tk.Label(
             actions,
-            text="运行中会锁定路径选择；输出文件夹不选时自动创建“输入文件夹名_识别输出”。",
+            textvariable=self.action_hint_var,
             bg=BG_COLOR,
             fg=MUTED_TEXT_COLOR,
             font=(FONT_FAMILY, 8),
@@ -465,6 +626,7 @@ class MainWindow:
             state=tk.DISABLED,
         )
         self.stop_button.grid(row=0, column=3)
+        self._refresh_start_button_state()
 
     def _build_log_section(self, parent: tk.Frame) -> None:
         panel = tk.Frame(
@@ -515,14 +677,203 @@ class MainWindow:
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         self.log_text.grid(row=0, column=0, sticky=tk.NSEW)
         log_scrollbar.grid(row=0, column=1, sticky=tk.NS)
+        self.log_text.tag_configure("placeholder", foreground="#94a3b8")
+        self.log_text.insert(tk.END, LOG_PLACEHOLDER, "placeholder")
+        self.log_has_placeholder = True
 
     def _choose_input(self, task_index: int) -> None:
         if self.running:
             return
         path = filedialog.askdirectory(initialdir=self._recent_dir("input_dir"))
         if path:
-            self.task_rows[task_index]["input_var"].set(path)
+            self._apply_input_selection(task_index, Path(path))
             self._remember_path("input_dir", path)
+
+    def _input_path_changed(self, task_index: int) -> None:
+        if self.running:
+            return
+        row = self.task_rows[task_index]
+        input_text = row["input_var"].get().strip()
+        if not input_text:
+            row["input_status_var"].set("")
+            row["last_scanned_input"] = None
+            row["input_status_label"].grid_remove()
+            row["input_ready"] = False
+            row["supported_file_count"] = 0
+            row["input_scanning"] = False
+            self._validate_output_paths()
+            return
+        input_dir = Path(input_text)
+        if not input_dir.is_dir():
+            row["input_status_var"].set("\u8f93\u5165\u6587\u4ef6\u5939\u4e0d\u5b58\u5728")
+            row["input_status_label"].grid()
+            row["input_status_label"].config(fg=DANGER_COLOR)
+            row["input_ready"] = False
+            row["supported_file_count"] = 0
+            row["input_scanning"] = False
+            row["last_scanned_input"] = None
+            self._validate_output_paths()
+            return
+        self._apply_input_selection(task_index, input_dir)
+
+    def _set_default_output_for_input(self, task_index: int, input_dir: Path) -> Path:
+        row = self.task_rows[task_index]
+        default_output = _default_output_dir_for(input_dir)
+        current_output = row["output_var"].get().strip()
+        previous_auto_output = row.get("auto_output_dir")
+        if not current_output or (
+            previous_auto_output is not None
+            and _same_path(Path(current_output), Path(previous_auto_output))
+        ):
+            row["output_var"].set(str(default_output))
+            row["auto_output_dir"] = str(default_output)
+            return default_output
+        return Path(current_output)
+
+    def _apply_input_selection(self, task_index: int, input_dir: Path) -> None:
+        row = self.task_rows[task_index]
+        normalized_input = str(input_dir.resolve())
+        row["input_var"].set(str(input_dir))
+        output_dir = self._set_default_output_for_input(task_index, input_dir)
+        if row.get("last_scanned_input") == normalized_input:
+            self._validate_output_paths()
+            return
+        row["input_scanning"] = True
+        row["input_ready"] = False
+        row["supported_file_count"] = 0
+        self._validate_output_paths()
+        row["last_scanned_input"] = normalized_input
+        row["scan_generation"] = row.get("scan_generation", 0) + 1
+        generation = row["scan_generation"]
+        row["input_status_label"].grid()
+        row["input_status_var"].set(
+            f"\u6b63\u5728\u626b\u63cf\u53ef\u5904\u7406\u6587\u4ef6... | \u8f93\u51fa\uff1a{output_dir.name}"
+        )
+        row["input_status_label"].config(fg=MUTED_TEXT_COLOR)
+
+        def scan() -> None:
+            try:
+                count = len(scan_input_files(input_dir))
+                error = None
+            except OSError as exc:
+                count = 0
+                error = str(exc)
+            self.root.after(
+                0,
+                lambda: self._apply_input_scan_result(
+                    task_index,
+                    normalized_input,
+                    generation,
+                    count,
+                    error,
+                ),
+            )
+
+        threading.Thread(target=scan, daemon=True).start()
+
+    def _apply_input_scan_result(
+        self,
+        task_index: int,
+        normalized_input: str,
+        generation: int,
+        count: int,
+        error: str | None,
+    ) -> None:
+        row = self.task_rows[task_index]
+        if row.get("scan_generation") != generation:
+            return
+        current_input = row["input_var"].get().strip()
+        if not current_input or str(Path(current_input).resolve()) != normalized_input:
+            return
+        row["input_status_label"].grid()
+
+        output_name = Path(row["output_var"].get().strip()).name
+        if error:
+            row["input_status_var"].set(f"\u65e0\u6cd5\u626b\u63cf\u8f93\u5165\u6587\u4ef6\u5939\uff1a{error}")
+            row["input_status_label"].config(fg=DANGER_COLOR)
+        elif count == 0:
+            row["input_status_var"].set("\u672a\u53d1\u73b0\u53ef\u5904\u7406\u7684 PDF \u6216\u56fe\u7247\u6587\u4ef6")
+            row["input_status_label"].config(fg=DANGER_COLOR)
+        else:
+            row["input_status_var"].set(
+                f"\u68c0\u6d4b\u5230 {count} \u4e2a\u53ef\u5904\u7406\u6587\u4ef6 | \u8f93\u51fa\uff1a{output_name}"
+            )
+            row["input_status_label"].config(fg=MUTED_TEXT_COLOR)
+
+        row["supported_file_count"] = count if error is None else 0
+        row["input_ready"] = error is None and count > 0
+        row["input_scanning"] = False
+        self._validate_output_paths()
+
+    def _validate_output_paths(self) -> None:
+        active_rows: list[tuple[int, dict, Path]] = []
+        for index, row in enumerate(self.task_rows):
+            row["output_valid"] = True
+            row["output_status_var"].set("")
+            row["output_status_label"].grid_remove()
+            if index > 0 and not self.task_two_expanded:
+                continue
+
+            output_text = row["output_var"].get().strip()
+            if not output_text:
+                continue
+            output_dir = Path(output_text)
+            if output_dir.exists() and not output_dir.is_dir():
+                self._set_output_error(index, "\u8f93\u51fa\u8def\u5f84\u6307\u5411\u4e86\u6587\u4ef6\uff0c\u8bf7\u9009\u62e9\u6587\u4ef6\u5939")
+                continue
+
+            input_text = row["input_var"].get().strip()
+            if input_text:
+                input_dir = Path(input_text)
+                if input_dir.is_dir() and _is_input_inside_output(input_dir, output_dir):
+                    self._set_output_error(index, "\u8f93\u5165\u6587\u4ef6\u5939\u4e0d\u80fd\u4f4d\u4e8e\u8f93\u51fa\u6587\u4ef6\u5939\u5185")
+                    continue
+            active_rows.append((index, row, output_dir.resolve()))
+
+        output_owners: dict[Path, list[int]] = {}
+        for index, _row, output_dir in active_rows:
+            output_owners.setdefault(output_dir, []).append(index)
+        for indexes in output_owners.values():
+            if len(indexes) < 2:
+                continue
+            for index in indexes:
+                self._set_output_error(index, "\u4e24\u7ec4\u4efb\u52a1\u7684\u8f93\u51fa\u6587\u4ef6\u5939\u4e0d\u80fd\u76f8\u540c")
+
+        self._refresh_start_button_state()
+
+    def _set_output_error(self, task_index: int, message: str) -> None:
+        row = self.task_rows[task_index]
+        row["output_valid"] = False
+        row["output_status_var"].set(message)
+        row["output_status_label"].grid()
+        row["output_status_label"].config(fg=DANGER_COLOR)
+
+    def _output_path_changed(self, task_index: int) -> None:
+        if self.running:
+            return
+        self.task_rows[task_index]["auto_output_dir"] = None
+        self._validate_output_paths()
+
+    def _expected_path_changed(self, task_index: int) -> None:
+        if self.running:
+            return
+        row = self.task_rows[task_index]
+        expected_text = row["expected_var"].get().strip()
+        if not expected_text:
+            row["expected_valid"] = True
+            row["expected_status_var"].set(EXPECTED_LIST_HINT)
+            row["expected_status_label"].config(fg=MUTED_TEXT_COLOR)
+            self._refresh_start_button_state()
+            return
+
+        expected_path = Path(expected_text)
+        if not expected_path.is_file():
+            row["expected_valid"] = False
+            row["expected_status_var"].set("\u9884\u671f\u7bb1\u53f7\u6e05\u5355\u4e0d\u5b58\u5728\u6216\u4e0d\u662f\u6587\u4ef6")
+            row["expected_status_label"].config(fg=DANGER_COLOR)
+        else:
+            row["expected_valid"] = self._update_expected_status(task_index, expected_path)
+        self._refresh_start_button_state()
 
     def _choose_output(self, task_index: int) -> None:
         if self.running:
@@ -531,6 +882,8 @@ class MainWindow:
         if path:
             self.task_rows[task_index]["output_var"].set(path)
             self._remember_path("output_dir", path)
+            self._validate_output_paths()
+            self.task_rows[task_index]["auto_output_dir"] = None
 
     def _choose_expected(self, task_index: int) -> None:
         if self.running:
@@ -540,7 +893,8 @@ class MainWindow:
         )
         if path:
             self.task_rows[task_index]["expected_var"].set(path)
-            self._update_expected_status(task_index, Path(path))
+            self._remember_path("expected_path", path)
+            self._expected_path_changed(task_index)
 
     def _start(self) -> None:
         if self.running:
@@ -549,7 +903,8 @@ class MainWindow:
         tasks = self._collect_tasks()
         if tasks is None:
             return
-        if not self._confirm_reusing_existing_results(tasks):
+        history_mode = self._choose_existing_results_mode(tasks)
+        if history_mode == HISTORY_MODE_CANCEL:
             return
 
         self._save_recent_task_paths(tasks)
@@ -558,12 +913,19 @@ class MainWindow:
         self.cancel_event = threading.Event()
         self._set_running_controls()
         self._append_log("开始处理")
-        thread = threading.Thread(target=self._process, args=(tasks, self.cancel_event), daemon=True)
+        thread = threading.Thread(
+            target=self._process,
+            args=(tasks, self.cancel_event),
+            kwargs={"skip_existing_successes": history_mode == HISTORY_MODE_RESUME},
+            daemon=True,
+        )
         thread.start()
 
     def _collect_tasks(self) -> list[DirectoryTask] | None:
         raw_tasks = []
         for index, row in enumerate(self.task_rows):
+            if index > 0 and getattr(self, "task_two_expanded", True) is False:
+                continue
             input_text = row["input_var"].get().strip()
             output_text = row["output_var"].get().strip()
             expected_text = row["expected_var"].get().strip()
@@ -617,6 +979,7 @@ class MainWindow:
 
         self.cancel_event.set()
         self.stop_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
+        self.action_hint_var.set("正在停止当前任务...")
         self._append_log("正在停止...")
 
     def _retry_failed_files(self, task_index: int) -> None:
@@ -656,6 +1019,7 @@ class MainWindow:
         tasks: list[DirectoryTask],
         cancel_event: threading.Event,
         task_number_map: dict[int, int] | None = None,
+        skip_existing_successes: bool = True,
     ) -> None:
         try:
             config = self._config_for_speed(default_config(work_dir=resolve_default_work_dir()))
@@ -674,6 +1038,7 @@ class MainWindow:
                 cancel_event=cancel_event,
                 on_progress_event=progress_handler,
                 max_workers=self._max_workers_for_speed(),
+                skip_existing_successes=skip_existing_successes,
             )
         except Exception as exc:
             self._append_log(f"处理失败: {exc}")
@@ -686,12 +1051,15 @@ class MainWindow:
         self.cancel_event = None
         self._set_idle_controls()
         self._enable_output_buttons()
+        self._show_completion_panels()
 
     def _set_running_controls(self) -> None:
         self.start_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
+        self.action_hint_var.set("处理中，路径已锁定；可点击“停止处理”结束当前任务。")
         self.sample_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
         self.stop_button.config(state=tk.NORMAL, bg=DANGER_COLOR, cursor="hand2")
         self.speed_menu.config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
+        self.task_two_toggle_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
         for row in self.task_rows:
             row["input_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
             row["output_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
@@ -702,10 +1070,10 @@ class MainWindow:
             row["expected_entry"].config(state=tk.DISABLED, disabledbackground="#eef2f7", disabledforeground=MUTED_TEXT_COLOR)
 
     def _set_idle_controls(self) -> None:
-        self.start_button.config(state=tk.NORMAL, bg=PRIMARY_COLOR, cursor="hand2")
         self.sample_button.config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
         self.stop_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
         self.speed_menu.config(state=tk.NORMAL, bg=SURFACE_COLOR, fg=TEXT_COLOR, cursor="hand2")
+        self.task_two_toggle_button.config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
         for row in self.task_rows:
             row["input_button"].config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
             row["output_button"].config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
@@ -714,8 +1082,25 @@ class MainWindow:
             row["output_entry"].config(state=tk.NORMAL, bg=SURFACE_MUTED, fg=TEXT_COLOR)
             row["expected_entry"].config(state=tk.NORMAL, bg=SURFACE_MUTED, fg=TEXT_COLOR)
 
+        self._refresh_start_button_state()
+
+    def _refresh_start_button_state(self) -> None:
+        if self.running or not hasattr(self, "start_button"):
+            return
+        ready, message = _start_readiness_state(self.task_rows, self.task_two_expanded)
+        if hasattr(self, "action_hint_var"):
+            self.action_hint_var.set(message)
+        self.start_button.config(
+            state=tk.NORMAL if ready else tk.DISABLED,
+            bg=PRIMARY_COLOR if ready else DISABLED_BG,
+            cursor="hand2" if ready else "arrow",
+        )
+
     def _append_log(self, message: str) -> None:
         def append() -> None:
+            if self.log_has_placeholder:
+                self.log_text.delete("1.0", tk.END)
+                self.log_has_placeholder = False
             self.log_text.insert(tk.END, f"{message}\n")
             self.log_text.see(tk.END)
             self.progress_var.set(message)
@@ -769,14 +1154,14 @@ class MainWindow:
         self.speed_description_var.set(_speed_mode_description(speed_mode))
 
 
-    def _update_expected_status(self, task_index: int, expected_path: Path) -> None:
+    def _update_expected_status(self, task_index: int, expected_path: Path) -> bool:
         row = self.task_rows[task_index]
         try:
             inspection = inspect_expected_codes(expected_path)
         except Exception as exc:
             row["expected_status_var"].set(f"清单读取失败: {exc}")
             row["expected_status_label"].config(fg=DANGER_COLOR)
-            return
+            return False
 
         preview = ", ".join(inspection.valid_codes[:3])
         preview_text = f" | 预览 {preview}" if preview else ""
@@ -785,11 +1170,13 @@ class MainWindow:
             f"重复 {inspection.duplicate_count} | 无效 {inspection.invalid_count}{preview_text}"
         )
         row["expected_status_label"].config(fg=DANGER_COLOR if inspection.invalid_count else MUTED_TEXT_COLOR)
+        return inspection.valid_count > 0
 
     def _validate_expected_list(self, task_index: int, expected_path: Path) -> bool:
-        self._update_expected_status(task_index, expected_path)
-        inspection = inspect_expected_codes(expected_path)
-        if inspection.valid_count == 0 and inspection.invalid_count > 0:
+        is_valid = self._update_expected_status(task_index, expected_path)
+        self.task_rows[task_index]["expected_valid"] = is_valid
+        self._refresh_start_button_state()
+        if not is_valid:
             messagebox.showerror(
                 "错误",
                 f"任务 {task_index + 1} 预期箱号清单没有可用箱号，请检查格式或校验位",
@@ -809,6 +1196,9 @@ class MainWindow:
             row["summary_var"].set("已处理 0/0 | 成功 0 | 未识别 0 | 箱号错误 0")
             row["progressbar"].config(maximum=1, value=0)
             row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
+            row["result_menu_button"].grid_remove()
+            row["completion_panel"].grid_remove()
+            row["safe_organize_button"].grid_remove()
 
     def _reset_single_task_progress(self, task_index: int) -> None:
         state = _new_task_progress_state(True)
@@ -817,8 +1207,10 @@ class MainWindow:
         row["progress_text_var"].set("\u5f85\u5904\u7406")
         row["summary_var"].set("\u5df2\u5904\u7406 0/0 | \u6210\u529f 0 | \u672a\u8bc6\u522b 0 | \u7bb1\u53f7\u9519\u8bef 0")
         row["progressbar"].config(maximum=1, value=0)
-
-
+        row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
+        row["result_menu_button"].grid_remove()
+        row["safe_organize_button"].grid_remove()
+        row["completion_panel"].grid_remove()
     def _record_task_result(self, state: dict, status: RecognitionStatus) -> None:
         total = state["total"]
         state["processed"] = min(state["processed"] + 1, total) if total else state["processed"] + 1
@@ -884,6 +1276,43 @@ class MainWindow:
                     fg=PRIMARY_COLOR,
                     cursor="hand2",
                 )
+                self.task_rows[index]["result_menu_button"].grid()
+
+    def _show_completion_panels(self) -> None:
+        for index, row in enumerate(self.task_rows):
+            if index >= len(self.active_output_dirs) or index >= len(self.task_progress_states):
+                row["completion_panel"].grid_remove()
+                row["safe_organize_button"].grid_remove()
+                continue
+            output_dir = self.active_output_dirs[index]
+            state = self.task_progress_states[index]
+            if not output_dir.exists() or state.get("started_at") is None:
+                row["completion_panel"].grid_remove()
+                row["safe_organize_button"].grid_remove()
+                continue
+            row["completion_summary_var"].set(_completion_summary(state))
+            row["completion_panel"].grid()
+            self._refresh_safe_organize_button(index, output_dir)
+
+    def _refresh_safe_organize_button(self, task_index: int, output_dir: Path) -> None:
+        row = self.task_rows[task_index]
+        button = row["safe_organize_button"]
+        button.grid_remove()
+        if task_index >= len(self.active_tasks):
+            return
+        expected_path = self.active_tasks[task_index].expected_codes_path
+        if expected_path is None or not expected_path.is_file():
+            return
+        try:
+            inspection = inspect_expected_codes(expected_path)
+            candidates = expected_review_candidates(output_dir, inspection.valid_codes)
+        except (OSError, ValueError):
+            return
+        if not candidates:
+            return
+        button.config(text=f"安全整理（{len(candidates)}）")
+        button.grid()
+
 
     def _open_output_path(self, task_index: int, target: str) -> None:
         if task_index >= len(self.active_output_dirs):
@@ -1124,6 +1553,7 @@ class MainWindow:
             self._show_review_summary(summary, parent=dialog)
             dialog.destroy()
             self._enable_output_buttons()
+            self._show_completion_panels()
 
         tk.Button(
             controls,
@@ -1182,7 +1612,7 @@ class MainWindow:
             return
         candidates = scan_review_candidates(output_dir)
         expected_set = {code.strip().upper() for code in expected_codes}
-        eligible = [candidate for candidate in candidates if candidate.valid and candidate.review_code in expected_set]
+        eligible = expected_review_candidates(output_dir, expected_codes)
         conflicts = [candidate for candidate in candidates if candidate.review_code in expected_set and not candidate.valid]
         remaining = len(candidates) - len(eligible)
         if not eligible:
@@ -1199,6 +1629,7 @@ class MainWindow:
         summary = auto_confirm_expected_candidates(output_dir, expected_codes)
         self._show_review_summary(summary)
         self._enable_output_buttons()
+        self._show_completion_panels()
 
     @staticmethod
     def _show_review_summary(summary, parent=None) -> None:
@@ -1249,20 +1680,147 @@ class MainWindow:
             self.preferences["expected_path"] = str(first.expected_codes_path)
         save_preferences(self.preferences)
 
-    def _confirm_reusing_existing_results(self, tasks: list[DirectoryTask]) -> bool:
-        reused_outputs = [task.output_dir for task in tasks if (task.output_dir / RESULT_WORKBOOK_NAME).exists()]
+    def _choose_existing_results_mode(self, tasks: list[DirectoryTask]) -> str:
+        reused_outputs = _existing_result_outputs(tasks)
         if not reused_outputs:
-            return True
+            return HISTORY_MODE_RESUME
+
+        result = {"mode": HISTORY_MODE_CANCEL}
+        dialog = tk.Toplevel(self.root)
+        dialog.title("已有识别结果")
+        dialog.configure(bg=SURFACE_COLOR)
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        body = tk.Frame(dialog, bg=SURFACE_COLOR, padx=20, pady=18)
+        body.pack(fill=tk.BOTH, expand=True)
+        tk.Label(
+            body,
+            text="检测到已有识别结果",
+            bg=SURFACE_COLOR,
+            fg=TEXT_COLOR,
+            font=(FONT_FAMILY, 12, "bold"),
+        ).pack(anchor=tk.W)
+        tk.Label(
+            body,
+            text="请选择本次如何处理当前输入目录中的文件：",
+            bg=SURFACE_COLOR,
+            fg=MUTED_TEXT_COLOR,
+            font=(FONT_FAMILY, 9),
+        ).pack(anchor=tk.W, pady=(6, 8))
         listed = "\n".join(str(path) for path in reused_outputs)
-        return messagebox.askyesno(
-            "复用历史结果",
-            "以下输出目录已有识别结果.xlsx，程序将复用历史结果并跳过已成功识别的文件。\n"
-            f"{listed}\n\n是否继续？",
+        tk.Message(
+            body,
+            text=listed,
+            width=620,
+            bg=SURFACE_MUTED,
+            fg=TEXT_COLOR,
+            font=(FONT_FAMILY, 8),
+            padx=10,
+            pady=8,
+        ).pack(fill=tk.X)
+
+        def choose(mode: str) -> None:
+            result["mode"] = mode
+            dialog.destroy()
+
+        actions = tk.Frame(body, bg=SURFACE_COLOR)
+        actions.pack(fill=tk.X, pady=(16, 0))
+        primary = tk.Button(
+            actions,
+            text="继续未完成文件（推荐）",
+            command=lambda: choose(HISTORY_MODE_RESUME),
+            bg=PRIMARY_COLOR,
+            fg="#ffffff",
+            activebackground=PRIMARY_HOVER,
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=16,
+            pady=8,
+            font=(FONT_FAMILY, 9, "bold"),
         )
+        primary.pack(side=tk.LEFT)
+        tk.Button(
+            actions,
+            text="重新识别当前输入内全部文件",
+            command=lambda: choose(HISTORY_MODE_REPROCESS),
+            bg="#eef4ff",
+            fg=PRIMARY_COLOR,
+            activebackground="#dbeafe",
+            activeforeground=PRIMARY_HOVER,
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=14,
+            pady=8,
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        tk.Button(
+            actions,
+            text="取消",
+            command=lambda: choose(HISTORY_MODE_CANCEL),
+            bg=SURFACE_MUTED,
+            fg=TEXT_COLOR,
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=14,
+            pady=8,
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.RIGHT)
+
+        dialog.protocol("WM_DELETE_WINDOW", lambda: choose(HISTORY_MODE_CANCEL))
+        dialog.bind("<Escape>", lambda _event: choose(HISTORY_MODE_CANCEL))
+        dialog.bind("<Return>", lambda _event: choose(HISTORY_MODE_RESUME))
+        primary.focus_set()
+        dialog.wait_window()
+        return result["mode"]
+
+
+def _existing_result_outputs(tasks: list[DirectoryTask]) -> list[Path]:
+    return [task.output_dir for task in tasks if (task.output_dir / RESULT_WORKBOOK_NAME).is_file()]
 
 
 def _speed_mode_description(speed_mode: str) -> str:
     return SPEED_MODE_DESCRIPTIONS.get(speed_mode, SPEED_MODE_DESCRIPTIONS[OCR_SPEED_BALANCED])
+
+
+def _start_readiness_state(task_rows: list[dict], task_two_expanded: bool) -> tuple[bool, str]:
+    has_active_task = False
+    total_files = 0
+    for index, row in enumerate(task_rows):
+        if index > 0 and not task_two_expanded:
+            continue
+        input_text = row["input_var"].get().strip()
+        output_text = row["output_var"].get().strip()
+        expected_text = row["expected_var"].get().strip()
+        if index > 0 and not input_text and not output_text and not expected_text:
+            continue
+        has_active_task = True
+        task_label = f"任务 {index + 1}"
+        if not input_text:
+            if index == 0:
+                return False, "请选择任务 1 输入文件夹；输出目录可不选。"
+            return False, f"{task_label} 请先选择输入文件夹。"
+        if row.get("input_scanning", False):
+            return False, f"正在检查{task_label}的可处理文件..."
+        if not row.get("input_ready", False):
+            if row.get("last_scanned_input") and row.get("supported_file_count", 0) <= 0:
+                return False, f"{task_label}未发现可处理文件，请检查输入目录。"
+            return False, f"请修正{task_label}的输入目录。"
+        if row.get("supported_file_count", 0) <= 0:
+            return False, f"{task_label}未发现可处理文件，请检查输入目录。"
+        if not row.get("output_valid", True) or not row.get("expected_valid", True):
+            return False, f"请修正{task_label}上方的红色提示。"
+        total_files += row.get("supported_file_count", 0)
+    if not has_active_task:
+        return False, "请选择任务 1 输入文件夹；输出目录可不选。"
+    return True, f"准备就绪，共 {total_files} 个文件；处理期间路径会锁定。"
+
+
+def _tasks_ready_for_start(task_rows: list[dict], task_two_expanded: bool) -> bool:
+    return _start_readiness_state(task_rows, task_two_expanded)[0]
+
 
 
 def _review_selection_marker(*, selected: bool, valid: bool) -> str:
@@ -1323,6 +1881,17 @@ def _duplicate_output_dir(raw_tasks) -> Path | None:
 
 def _default_output_dir_for(input_dir: Path) -> Path:
     return input_dir.parent / f"{input_dir.name}_识别输出"
+
+
+def _same_path(first: Path, second: Path) -> bool:
+    return first.resolve() == second.resolve()
+
+
+def _completion_summary(state: dict) -> str:
+    review_count = state["unrecognized"] + state["invalid"]
+    elapsed = _format_task_duration(_task_elapsed_seconds(state))
+    return f"\u5904\u7406\u7ed3\u675f\uff1a\u6210\u529f {state['success']} | \u5f85\u590d\u6838 {review_count} | \u7528\u65f6 {elapsed}"
+
 
 def _is_input_inside_output(input_dir: Path, output_dir: Path) -> bool:
     resolved_input = input_dir.resolve()

@@ -339,3 +339,32 @@ def test_process_directory_tasks_uses_friendly_exception_message(tmp_path: Path)
     )
 
     assert any("Excel/WPS" in message for message in messages)
+
+
+def test_process_directory_tasks_forwards_reprocess_mode(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    received = []
+
+    def fake_process_directory(
+        _input_dir,
+        _output_dir,
+        _config,
+        _engine,
+        _on_progress,
+        cancel_event=None,
+        skip_existing_successes=True,
+    ):
+        received.append(skip_existing_successes)
+        return []
+
+    process_directory_tasks(
+        tasks=[DirectoryTask(input_dir=input_dir, output_dir=output_dir, label="task")],
+        base_config=AppConfig(work_dir=tmp_path / "work"),
+        engine_factory=FakeEngine,
+        process_directory_func=fake_process_directory,
+        skip_existing_successes=False,
+    )
+
+    assert received == [False]

@@ -34,6 +34,7 @@ def process_directory_tasks(
     on_progress_event: TaskProgressCallback | None = None,
     max_workers: int = 2,
     process_directory_func: ProcessDirectoryFunc = process_directory,
+    skip_existing_successes: bool = True,
 ) -> list[RecognitionResult]:
     if not tasks:
         return []
@@ -54,6 +55,7 @@ def process_directory_tasks(
                 on_progress_event,
                 file_worker_count,
                 process_directory_func,
+                skip_existing_successes,
             )
             for task_number, task in enumerate(tasks, start=1)
         ]
@@ -73,6 +75,7 @@ def _process_one_task(
     on_progress_event: TaskProgressCallback | None,
     max_file_workers: int,
     process_directory_func: ProcessDirectoryFunc,
+    skip_existing_successes: bool,
 ) -> list[RecognitionResult]:
     config = _task_config(base_config, task_number)
     engine = engine_factory(config)
@@ -94,6 +97,8 @@ def _process_one_task(
         kwargs["on_progress_event"] = prefixed_progress_event
     if _accepts_keyword(process_directory_func, "max_file_workers"):
         kwargs["max_file_workers"] = max_file_workers
+    if _accepts_keyword(process_directory_func, "skip_existing_successes"):
+        kwargs["skip_existing_successes"] = skip_existing_successes
 
     try:
         return process_directory_func(

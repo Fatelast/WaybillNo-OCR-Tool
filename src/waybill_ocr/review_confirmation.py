@@ -139,12 +139,16 @@ def confirm_review_candidates(output_dir: Path, candidates: list[ReviewCandidate
     )
 
 
-def auto_confirm_expected_candidates(output_dir: Path, expected_codes: list[str]) -> ReviewActionSummary:
-    """仅整理与预期清单唯一匹配且无冲突的待确认候选。"""
+def expected_review_candidates(output_dir: Path, expected_codes: list[str]) -> list[ReviewCandidate]:
+    """返回与预期清单匹配且可安全整理的待确认候选。"""
     expected_set = {code.strip().upper() for code in expected_codes if code and code.strip()}
     candidates = scan_review_candidates(output_dir)
-    selected = [candidate for candidate in candidates if candidate.valid and candidate.review_code in expected_set]
-    return confirm_review_candidates(output_dir, selected)
+    return [candidate for candidate in candidates if candidate.valid and candidate.review_code in expected_set]
+
+
+def auto_confirm_expected_candidates(output_dir: Path, expected_codes: list[str]) -> ReviewActionSummary:
+    """仅整理与预期清单唯一匹配且无冲突的待确认候选。"""
+    return confirm_review_candidates(output_dir, expected_review_candidates(output_dir, expected_codes))
 
 
 def _validate_candidate(code: str, target_path: Path, existing_codes: set[str]) -> tuple[bool, str | None]:
