@@ -10,10 +10,16 @@ def test_main_window_imports_diagnostics_helpers():
 
 
 def test_main_window_layout_keeps_task_area_compact_for_log_visibility():
+    from waybill_ocr.ui import main_window
     source = (Path(__file__).resolve().parents[1] / "src" / "waybill_ocr" / "ui" / "main_window.py").read_text(encoding="utf-8")
 
     assert "progress_cell" in source
-    assert "height=24" in source
+    assert main_window.WINDOW_DEFAULT_GEOMETRY == "1040x840"
+    assert main_window.WINDOW_MIN_SIZE == (920, 800)
+    assert main_window.LOG_SECTION_MIN_HEIGHT == 180
+    assert "height=16" in source
+    assert "speed_controls = tk.Frame(speed_box, bg=BG_COLOR)" in source
+    assert "self.speed_menu.grid(row=0, column=1)" in source
     assert "输出目录可不选" in source
     assert "\u9009\u62e9\u6587\u4ef6\uff0c\u4e0d\u662f\u6587\u4ef6\u5939" not in source
     assert "\\u975e\\u5fc5\\u9009" not in source
@@ -224,7 +230,16 @@ def test_main_window_contains_sample_verify_and_result_entry_labels():
 
     assert "\u6837\u672c\u9a8c\u6536" in source
     assert "\\u6253\\u5f00\\u7ed3\\u679c" in source
-    assert "tk.Menubutton" in source
+    assert "button = tk.Menubutton(" in source
+    assert "progressbar = ttk.Progressbar(" in source
+    assert "entry_shell" not in source
+    assert "header = tk.Frame(parent, bg=PRIMARY_COLOR, padx=12, pady=10)" in source
+    assert "status = tk.Label(" in source
+    assert "task_frame = tk.Frame(" in source
+    assert "completion_panel = tk.Frame(" in source
+    assert "panel = tk.Frame(" in source
+
+
     assert "\\u8bc6\\u522b\\u7ed3\\u679c.xlsx" in source
     assert "\\u6b63\\u786e\\u8bc6\\u522b" in source
     assert "\\u672a\\u8bc6\\u522b" in source
@@ -234,6 +249,32 @@ def test_main_window_contains_sample_verify_and_result_entry_labels():
     assert "重新识别当前输入内全部文件" in source
     assert "result_menu_button.grid_remove()" in source
     assert main_window.LOG_PLACEHOLDER in source
+
+
+def test_main_window_uses_native_card_frames_to_avoid_canvas_layering():
+    source = (Path(__file__).resolve().parents[1] / "src" / "waybill_ocr" / "ui" / "main_window.py").read_text(encoding="utf-8")
+
+    assert source.count("RoundedPanel(") == 2
+    assert "completion_panel = tk.Frame(" in source
+    assert "panel = tk.Frame(" in source
+    assert "log_frame = RoundedPanel(" in source
+
+def test_gui_theme_uses_accessible_palette_and_log_tags():
+    from waybill_ocr.ui import main_window
+
+    assert main_window.BG_COLOR == "#F4FBF9"
+    assert main_window.PRIMARY_COLOR == "#257D80"
+    assert main_window.BUTTON_BROWSE == "#96B99E"
+    assert main_window.BUTTON_SAMPLE == "#F5B98B"
+    assert main_window.BUTTON_START == "#9CD366"
+    assert main_window.DANGER_COLOR == "#E3887B"
+    assert main_window.SECONDARY_FG == "#FFFFFF"
+    assert main_window.LOG_BG == "#262521"
+    assert main_window.LOG_FG == "#F1E3CD"
+    assert main_window.LOG_ERROR_FG == "#DD8E75"
+    assert main_window._log_tag_for_message("\u5904\u7406\u4e2d\uff1a1/10") == "info"
+    assert main_window._log_tag_for_message("\u5904\u7406\u5931\u8d25\uff1a\u6587\u4ef6\u65e0\u6cd5\u8bfb\u53d6") == "error"
+
 
 
 
@@ -299,10 +340,16 @@ def test_main_window_keeps_expected_list_visible_and_removes_duplicate_review_en
     source = Path(main_window.__file__).read_text(encoding="utf-8")
 
     assert "task_two_toggle_button" in source
+    assert "advanced_tools_button" in source
+    assert "advanced_tools_menu.add_command" in source
     assert "advanced_toggle_button" not in source
     assert "advanced_panel" not in source
     assert "expected_status_label.grid_remove()" not in source
     assert "\\u6279\\u91cf\\u786e\\u8ba4\\u5e76\\u6574\\u7406" not in source
+    assert "self.advanced_tools_button.grid(row=0, column=1" in source
+    assert 'add_command(label="样本验收"' not in source
+    assert 'add_command(label="环境检查"' in source
+    assert 'add_command(label="导出诊断信息"' in source
 
 class FakeWidget:
     def __init__(self) -> None:
@@ -406,8 +453,9 @@ def test_duplicate_output_paths_are_reported_inline(tmp_path: Path):
 def test_expected_list_hint_explains_that_results_are_not_overwritten():
     from waybill_ocr.ui import main_window
 
-    assert "\u4ec5\u7528\u4e8e\u6838\u5bf9\u7f3a\u5931" in main_window.EXPECTED_LIST_HINT
-    assert "\u4e0d\u4f1a\u8986\u76d6\u8bc6\u522b\u7ed3\u679c" in main_window.EXPECTED_LIST_HINT
+    assert "\u7f3a\u5931\u6838\u5bf9" in main_window.EXPECTED_LIST_HINT
+    assert "\u5f85\u786e\u8ba4\u8f85\u52a9\u6574\u7406" in main_window.EXPECTED_LIST_HINT
+    assert "\u4e0d\u4f1a\u76f4\u63a5\u6539\u4e3a\u6b63\u786e\u8bc6\u522b" in main_window.EXPECTED_LIST_HINT
 
 
 def test_start_readiness_reports_scanning_empty_invalid_and_ready_states():
@@ -482,3 +530,112 @@ def test_safe_organize_button_uses_shared_candidate_count(tmp_path: Path):
     main_window.MainWindow._refresh_safe_organize_button(window, 0, output_dir)
 
     assert not button.visible
+
+
+def test_task_section_expands_without_internal_scrollbar():
+    from waybill_ocr.ui import main_window
+
+    source = Path(main_window.__file__).read_text(encoding="utf-8")
+
+    assert "section = tk.Frame(parent, bg=BG_COLOR)" in source
+    assert "section.grid(row=1, column=0, sticky=tk.EW, pady=(12, 0))" in source
+    assert "self.task_viewport" not in source
+    assert "Task.Vertical.TScrollbar" not in source
+
+
+def test_stop_and_advanced_tools_controls_follow_processing_state():
+    import tkinter as tk
+
+    from waybill_ocr.ui import main_window
+
+    row = {
+        key: FakeWidget()
+        for key in (
+            "input_button",
+            "output_button",
+            "expected_button",
+            "result_menu_button",
+            "input_entry",
+            "output_entry",
+            "expected_entry",
+        )
+    }
+    window = SimpleNamespace(
+        start_button=FakeWidget(),
+        advanced_tools_button=FakeWidget(),
+        stop_button=FakeWidget(),
+        speed_menu=FakeWidget(),
+        task_two_toggle_button=FakeWidget(),
+        action_hint_var=FakeVar(),
+        task_rows=[row],
+    )
+    window._refresh_start_button_state = lambda: None
+
+    main_window.MainWindow._set_idle_controls(window)
+
+    assert window.stop_button.options["state"] == tk.DISABLED
+    assert window.stop_button.options["bg"] == main_window.DISABLED_BG
+    assert window.stop_button.options["fg"] == main_window.DISABLED_FG
+    assert window.advanced_tools_button.options["state"] == tk.NORMAL
+
+    main_window.MainWindow._set_running_controls(window)
+
+    assert window.stop_button.options["state"] == tk.NORMAL
+    assert window.stop_button.options["bg"] == main_window.DANGER_COLOR
+    assert window.stop_button.options["fg"] == "#FFFFFF"
+    assert window.advanced_tools_button.options["state"] == tk.DISABLED
+
+
+def test_screen_center_geometry_clamps_and_centers_dialog():
+    from waybill_ocr.ui.main_window import _screen_center_geometry
+
+    assert _screen_center_geometry(
+        width=400, height=300, screen_width=1920, screen_height=1080
+    ) == "400x300+760+390"
+    assert _screen_center_geometry(
+        width=2000, height=1000, screen_width=1280, screen_height=720
+    ) == "1280x720+0+0"
+
+
+def test_secondary_dialogs_are_centered_before_modal_grab():
+    from waybill_ocr.ui import main_window
+
+    source = Path(main_window.__file__).read_text(encoding="utf-8")
+
+    assert source.count("dialog.withdraw()") == 2
+
+
+def test_review_button_visibility_follows_candidate_count(monkeypatch, tmp_path: Path):
+    from waybill_ocr.ui import main_window
+
+    output_dir = tmp_path / "output"
+    button = FakeWidget()
+    window = SimpleNamespace(task_rows=[{"review_button": button}])
+
+    monkeypatch.setattr(main_window, "scan_review_candidates", lambda _output: [])
+    main_window.MainWindow._refresh_review_button(window, 0, output_dir)
+    assert not button.visible
+
+    monkeypatch.setattr(main_window, "scan_review_candidates", lambda _output: [object(), object()])
+    main_window.MainWindow._refresh_review_button(window, 0, output_dir)
+    assert button.visible
+
+
+def test_diagnostic_report_contains_environment_and_log_details():
+    from waybill_ocr.config import AppConfig
+    from waybill_ocr.ui.main_window import _diagnostic_report_text
+
+    report = _diagnostic_report_text(
+        AppConfig(
+            tesseract_cmd=Path("D:/runtime/tools/tesseract/tesseract.exe"),
+            poppler_path=Path("D:/runtime/tools/poppler"),
+        ),
+        ["[OK] Pillow 可用", "[缺失] Poppler 不可用"],
+        "开始处理\n处理失败: 示例",
+        "2026-07-23 17:05:00",
+    )
+
+    assert "诊断信息" in report
+    assert f"Tesseract 路径: {Path('D:/runtime/tools/tesseract/tesseract.exe')}" in report
+    assert "[缺失] Poppler 不可用" in report
+    assert "处理失败: 示例" in report

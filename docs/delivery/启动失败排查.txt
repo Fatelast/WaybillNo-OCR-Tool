@@ -5,11 +5,12 @@
 - 不要在压缩包内直接运行 exe。
 
 2. Tesseract
-- 确认 tools/tesseract/tesseract.exe 和 tools/tesseract/tessdata/eng.traineddata 存在。
-- 如日志提示 TESSDATA_PREFIX，请使用完整交付包目录重新运行。
+- 不要手动检查或替换内部 Tesseract 文件；请重新完整解压离线包，并保持 exe 与 `_internal` 同级。
+- 如日志提示 TESSDATA_PREFIX，请使用完整交付包目录重新运行，不要从压缩包内直接启动。
 
 3. Poppler
-- 确认 tools/poppler/Library/bin/pdftoppm.exe 存在。
+- 不要手动查找 Poppler 文件；它已随离线包收纳在 `_internal` 中。
+- 请重新完整解压离线包后再尝试处理 PDF。
 - PDF 转图失败时，先检查 PDF 是否损坏、加密或被占用。
 
 4. 结果表无法写入

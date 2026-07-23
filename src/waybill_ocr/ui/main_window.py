@@ -1,13 +1,17 @@
 import os
+import platform
+import sys
 import threading
 import tkinter as tk
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from time import monotonic
 from tkinter import filedialog, messagebox, ttk
 
 from waybill_ocr.batch_processor import ProcessingProgressEvent, count_retryable_results
 from waybill_ocr.config import (
+    AppConfig,
     OCR_SPEED_BALANCED,
     OCR_SPEED_FAST,
     OCR_SPEED_STABLE,
@@ -32,24 +36,59 @@ from waybill_ocr.ui.preferences import load_preferences, save_preferences
 from waybill_ocr.ui.task_runner import DirectoryTask, process_directory_tasks
 
 MAX_TASKS = 2
+WINDOW_DEFAULT_GEOMETRY = "1040x840"
+WINDOW_MIN_SIZE = (920, 800)
+LOG_SECTION_MIN_HEIGHT = 180
+
 SAMPLE_INPUT_DIR = Path("samples/cases")
 SAMPLE_FALLBACK_INPUT_DIR = Path("samples/input")
 SAMPLE_OUTPUT_DIR = Path("samples/actual")
 SAMPLE_BASELINE_PATH = resolve_default_baseline_path()
 
-BG_COLOR = "#f4f7fb"
-SURFACE_COLOR = "#ffffff"
-SURFACE_MUTED = "#f8fafc"
-BORDER_COLOR = "#d7dee9"
-TEXT_COLOR = "#172033"
-MUTED_TEXT_COLOR = "#667085"
-PRIMARY_COLOR = "#2563eb"
-PRIMARY_HOVER = "#1d4ed8"
-DANGER_COLOR = "#dc2626"
-DANGER_HOVER = "#b91c1c"
-LOG_BG = "#0f172a"
-LOG_FG = "#dbeafe"
-DISABLED_BG = "#e5e7eb"
+BG_COLOR = "#F4FBF9"
+SURFACE_COLOR = "#FFFFFF"
+SURFACE_MUTED = "#EDF8F5"
+BORDER_COLOR = "#CFE6E0"
+TEXT_COLOR = "#244640"
+MUTED_TEXT_COLOR = "#5F7B75"
+PRIMARY_COLOR = "#257D80"
+PRIMARY_HOVER = "#1C696C"
+PRIMARY_SUBTLE_FG = "#D9F5F0"
+DANGER_COLOR = "#E3887B"
+DANGER_HOVER = "#CD7065"
+ERROR_TEXT_COLOR = "#B8584E"
+BUTTON_BROWSE = "#96B99E"
+BUTTON_BROWSE_HOVER = "#7FA68A"
+BUTTON_SAMPLE = "#F5B98B"
+BUTTON_SAMPLE_HOVER = "#E6A878"
+BUTTON_START = "#9CD366"
+BUTTON_START_HOVER = "#87BC54"
+INPUT_BG = "#FFFFFF"
+BADGE_BG = "#E2F1FF"
+BADGE_FG = "#4E739C"
+STATUS_BG = "#1B6D70"
+PROGRESS_TROUGH = "#DCEFEA"
+PROGRESS_FILL = "#8FD7CA"
+SUCCESS_SURFACE = "#ECF8F4"
+SUCCESS_BORDER = "#CAEADF"
+TREE_SELECTED_BG = "#DDF3EC"
+LOG_BG = "#262521"
+LOG_BORDER = "#48453F"
+LOG_SCROLLBAR = "#857D70"
+LOG_FG = "#F1E3CD"
+LOG_ERROR_FG = "#DD8E75"
+LOG_PLACEHOLDER_FG = "#BBAF9E"
+LOG_WATERMARK = "#36342F"
+SECONDARY_FG = "#FFFFFF"
+DISABLED_BG = "#E0ECE8"
+DISABLED_FG = "#79918B"
+DISABLED_INPUT_BG = "#F1F7F5"
+REVIEW_SELECTED_BG = "#E6F6F1"
+REVIEW_DISABLED_BG = "#F3F8F6"
+REVIEW_DISABLED_FG = "#91A39E"
+REVIEW_HINT_BG = "#E9F7F2"
+REVIEW_HINT_BORDER = "#C7EADD"
+REVIEW_HINT_FG = "#315F58"
 FONT_FAMILY = "Microsoft YaHei UI"
 SPEED_MODE_LABELS = {
     OCR_SPEED_STABLE: "稳定模式",
@@ -63,13 +102,391 @@ SPEED_MODE_DESCRIPTIONS = {
     OCR_SPEED_FAST: "适合清晰文件快速粗筛；失败件会保留待确认，不做深度复核。",
 }
 EXPECTED_LIST_HINT = (
-    "\u9884\u671f\u6e05\u5355\uff1a\u53ef\u9009\uff1b\u4ec5\u7528\u4e8e\u6838\u5bf9\u7f3a\u5931\uff0c\u4e0d\u4f1a\u8986\u76d6\u8bc6\u522b\u7ed3\u679c\uff1b"
+    "\u9884\u671f\u6e05\u5355\uff1a\u53ef\u9009\uff1b\u7528\u4e8e\u7f3a\u5931\u6838\u5bf9\u548c\u5f85\u786e\u8ba4\u8f85\u52a9\u6574\u7406\uff0c\u4e0d\u4f1a\u76f4\u63a5\u6539\u4e3a\u6b63\u786e\u8bc6\u522b\uff1b"
     "\u652f\u6301 .txt / .csv / .xlsx\u3002"
 )
 HISTORY_MODE_RESUME = "resume"
 HISTORY_MODE_REPROCESS = "reprocess"
 HISTORY_MODE_CANCEL = "cancel"
+
+
+def _surface_color(widget) -> str:
+    return getattr(widget, "surface_color", widget.cget("bg"))
+
+
+def _draw_rounded_rectangle(
+    canvas: tk.Canvas,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    radius: float,
+    *,
+    fill: str,
+    outline: str = "",
+    width: int = 1,
+    tags: str = "rounded",
+) -> None:
+    radius = max(1, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
+    points = (
+        x1 + radius,
+        y1,
+        x2 - radius,
+        y1,
+        x2,
+        y1,
+        x2,
+        y1 + radius,
+        x2,
+        y2 - radius,
+        x2,
+        y2,
+        x2 - radius,
+        y2,
+        x1 + radius,
+        y2,
+        x1,
+        y2,
+        x1,
+        y2 - radius,
+        x1,
+        y1 + radius,
+        x1,
+        y1,
+    )
+    canvas.create_polygon(
+        points,
+        smooth=True,
+        splinesteps=24,
+        fill=fill,
+        outline=outline,
+        width=width,
+        tags=tags,
+    )
+
+
+class RoundedPanel(tk.Frame):
+    def __init__(
+        self,
+        master,
+        *,
+        fill: str,
+        outer_bg: str | None = None,
+        radius: int = 10,
+        border_color: str | None = None,
+        shadow_color: str | None = None,
+        shadow_offset: int = 0,
+        **kwargs,
+    ) -> None:
+        self.surface_color = fill
+        self._outer_bg = outer_bg or _surface_color(master)
+        self._radius = radius
+        self._border_color = border_color
+        self._shadow_color = shadow_color
+        self._shadow_offset = shadow_offset
+        super().__init__(
+            master,
+            bg=self._outer_bg,
+            borderwidth=0,
+            highlightthickness=0,
+            **kwargs,
+        )
+        self._background_canvas = tk.Canvas(
+            self,
+            bg=self._outer_bg,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self._background_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self._background_canvas.bind("<Configure>", self._redraw_background)
+
+    def set_fill(self, fill: str) -> None:
+        self.surface_color = fill
+        self._redraw_background()
+
+    def _redraw_background(self, _event=None) -> None:
+        canvas = self._background_canvas
+        canvas.delete("rounded")
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+        offset = max(0, self._shadow_offset)
+        if self._shadow_color and offset:
+            _draw_rounded_rectangle(
+                canvas,
+                1 + offset,
+                1 + offset,
+                width - 1,
+                height - 1,
+                self._radius,
+                fill=self._shadow_color,
+            )
+        _draw_rounded_rectangle(
+            canvas,
+            1,
+            1,
+            width - 1 - offset,
+            height - 1 - offset,
+            self._radius,
+            fill=self.surface_color,
+            outline=self._border_color or self.surface_color,
+        )
+
+
+class _RoundedControl(RoundedPanel):
+    def __init__(
+        self,
+        master,
+        control_class,
+        *,
+        radius: int = 8,
+        border_color: str | None = None,
+        **kwargs,
+    ) -> None:
+        fill = kwargs.get("bg", BUTTON_BROWSE)
+        active_fill = kwargs.get("activebackground", fill)
+        cursor = kwargs.get("cursor", "arrow")
+        super().__init__(
+            master,
+            fill=fill,
+            outer_bg=_surface_color(master),
+            radius=radius,
+            border_color=border_color,
+            padx=2,
+            pady=1,
+        )
+        self._normal_fill = fill
+        self._active_fill = active_fill
+        self.configure(cursor=cursor)
+        kwargs.update(
+            {
+                "bg": fill,
+                "fg": "#FFFFFF",
+                "activebackground": active_fill,
+                "activeforeground": "#FFFFFF",
+                "disabledforeground": "#FFFFFF",
+                "borderwidth": 0,
+                "highlightthickness": 0,
+                "relief": tk.FLAT,
+            }
+        )
+        self.control = control_class(self, **kwargs)
+        self.control.pack(fill=tk.BOTH, expand=True, padx=3, pady=1)
+        self.control.bind("<Enter>", self._show_hover, add="+")
+        self.control.bind("<Leave>", self._hide_hover, add="+")
+        for click_target in (self, self._background_canvas):
+            click_target.bind("<Enter>", self._show_hover, add="+")
+            click_target.bind("<Leave>", self._hide_hover, add="+")
+            click_target.bind("<Button-1>", self._invoke_from_surface, add="+")
+
+    def configure(self, cnf=None, **kwargs):
+        if cnf:
+            kwargs.update(cnf)
+        if not hasattr(self, "control"):
+            return super().configure(**kwargs)
+        fill = kwargs.get("bg", kwargs.get("background"))
+        if fill is not None:
+            self._normal_fill = fill
+            self.set_fill(fill)
+        active_fill = kwargs.get("activebackground")
+        if active_fill is not None:
+            self._active_fill = active_fill
+        if "cursor" in kwargs:
+            super().configure(cursor=kwargs["cursor"])
+        if "fg" in kwargs:
+            kwargs["fg"] = "#FFFFFF"
+        if "foreground" in kwargs:
+            kwargs["foreground"] = "#FFFFFF"
+        kwargs["activeforeground"] = "#FFFFFF"
+        kwargs["disabledforeground"] = "#FFFFFF"
+        return self.control.configure(**kwargs)
+
+    config = configure
+
+    def __getitem__(self, key):
+        return self.control[key]
+
+    def __setitem__(self, key, value) -> None:
+        self.control[key] = value
+
+    def focus_set(self) -> None:
+        self.control.focus_set()
+
+    def invoke(self):
+        return self.control.invoke()
+
+    def _show_hover(self, _event=None) -> None:
+        if str(self.control.cget("state")) != str(tk.DISABLED):
+            self.set_fill(self._active_fill)
+
+    def _hide_hover(self, _event=None) -> None:
+        self.set_fill(self._normal_fill)
+
+    def _invoke_from_surface(self, _event=None) -> None:
+        if str(self.control.cget("state")) != str(tk.DISABLED):
+            self.control.focus_set()
+            self.control.invoke()
+
+
+class RoundedButton(_RoundedControl):
+    def __init__(self, master, **kwargs) -> None:
+        super().__init__(master, tk.Button, **kwargs)
+
+
+class RoundedMenubutton(_RoundedControl):
+    def __init__(self, master, **kwargs) -> None:
+        super().__init__(master, tk.Menubutton, **kwargs)
+
+
+class RoundedOptionMenu(RoundedPanel):
+    def __init__(self, master, variable, *values, command=None) -> None:
+        super().__init__(
+            master,
+            fill=INPUT_BG,
+            outer_bg=_surface_color(master),
+            radius=8,
+            border_color=BORDER_COLOR,
+            padx=2,
+            pady=1,
+        )
+        self.control = tk.OptionMenu(self, variable, *values, command=command)
+        self.control.configure(
+            bg=INPUT_BG,
+            fg=TEXT_COLOR,
+            activebackground=SURFACE_MUTED,
+            activeforeground=TEXT_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            relief=tk.FLAT,
+        )
+        self.control.pack(fill=tk.BOTH, expand=True, padx=3, pady=1)
+
+    def configure(self, cnf=None, **kwargs):
+        if cnf:
+            kwargs.update(cnf)
+        fill = kwargs.get("bg", kwargs.get("background"))
+        if fill is not None:
+            self.set_fill(fill)
+        return self.control.configure(**kwargs)
+
+    config = configure
+
+    def __getitem__(self, key):
+        return self.control[key]
+
+    def __setitem__(self, key, value) -> None:
+        self.control[key] = value
+
+
+class RoundedProgressbar(tk.Canvas):
+    def __init__(self, master, *, maximum=1, value=0, style=None, **kwargs) -> None:
+        self.maximum = maximum
+        self.value = value
+        super().__init__(
+            master,
+            height=10,
+            bg=_surface_color(master),
+            borderwidth=0,
+            highlightthickness=0,
+            **kwargs,
+        )
+        self.bind("<Configure>", self._redraw)
+
+    def configure(self, cnf=None, **kwargs):
+        if cnf:
+            kwargs.update(cnf)
+        self.maximum = kwargs.pop("maximum", self.maximum)
+        self.value = kwargs.pop("value", self.value)
+        kwargs.pop("style", None)
+        result = super().configure(**kwargs) if kwargs else None
+        self._redraw()
+        return result
+
+    config = configure
+
+    def _redraw(self, _event=None) -> None:
+        self.delete("all")
+        width = self.winfo_width()
+        height = self.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+        _draw_rounded_rectangle(
+            self,
+            0,
+            0,
+            width,
+            height,
+            height / 2,
+            fill=PROGRESS_TROUGH,
+        )
+        ratio = 0 if not self.maximum else max(0.0, min(1.0, self.value / self.maximum))
+        filled_width = width * ratio
+        if filled_width > 1:
+            _draw_rounded_rectangle(
+                self,
+                0,
+                0,
+                max(height, filled_width),
+                height,
+                height / 2,
+                fill=PROGRESS_FILL,
+            )
+
+
+def _log_tag_for_message(message: str) -> str:
+    error_markers = ("错误", "失败", "异常", "缺失", "无法", "未识别", "PermissionError")
+    return "error" if any(marker in message for marker in error_markers) else "info"
+
+
+def _screen_center_geometry(*, width: int, height: int, screen_width: int, screen_height: int) -> str:
+    target_width = min(max(1, width), max(1, screen_width))
+    target_height = min(max(1, height), max(1, screen_height))
+    x = max(0, (screen_width - target_width) // 2)
+    y = max(0, (screen_height - target_height) // 2)
+    return f"{target_width}x{target_height}+{x}+{y}"
+
+
+def _center_dialog_on_screen(dialog: tk.Toplevel) -> None:
+    dialog.update_idletasks()
+    width = max(dialog.winfo_width(), dialog.winfo_reqwidth())
+    height = max(dialog.winfo_height(), dialog.winfo_reqheight())
+    dialog.geometry(
+        _screen_center_geometry(
+            width=width,
+            height=height,
+            screen_width=dialog.winfo_screenwidth(),
+            screen_height=dialog.winfo_screenheight(),
+        )
+    )
+
+
 LOG_PLACEHOLDER = "等待开始处理，识别进度和异常会显示在这里。"
+
+def _diagnostic_report_text(
+    config: AppConfig,
+    diagnostic_messages: list[str],
+    log_text: str,
+    generated_at: str,
+) -> str:
+    tesseract_path = str(config.tesseract_cmd) if config.tesseract_cmd else "未找到"
+    poppler_path = str(config.poppler_path) if config.poppler_path else "未找到"
+    lines = [
+        f"{APP_NAME} {CURRENT_VERSION} 诊断信息",
+        f"生成时间: {generated_at}",
+        f"系统: {platform.platform()}",
+        f"运行程序: {sys.executable}",
+        f"工作目录: {Path.cwd()}",
+        f"Tesseract 路径: {tesseract_path}",
+        f"Poppler 路径: {poppler_path}",
+        "",
+        "环境检查:",
+        *diagnostic_messages,
+        "",
+        "处理日志:",
+        log_text.strip() or "（暂无日志）",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 
@@ -77,8 +494,8 @@ class MainWindow:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title(f"{APP_NAME} {CURRENT_VERSION}")
-        self.root.geometry("1040x740")
-        self.root.minsize(920, 680)
+        self.root.geometry(WINDOW_DEFAULT_GEOMETRY)
+        self.root.minsize(*WINDOW_MIN_SIZE)
         self.root.configure(bg=BG_COLOR)
 
         self.task_two_expanded = False
@@ -104,8 +521,18 @@ class MainWindow:
     def _configure_style(self) -> None:
         style = ttk.Style(self.root)
         style.theme_use("clam")
-        style.configure("Vertical.TScrollbar", background="#cbd5e1", troughcolor="#1e293b", bordercolor="#1e293b")
-        style.configure("Horizontal.TProgressbar", troughcolor="#e2e8f0", background=PRIMARY_COLOR, bordercolor="#e2e8f0")
+        style.configure(
+            "Vertical.TScrollbar",
+            background=LOG_SCROLLBAR,
+            troughcolor=LOG_BG,
+            bordercolor=LOG_BG,
+        )
+        style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor=PROGRESS_TROUGH,
+            background=PRIMARY_COLOR,
+            bordercolor=PROGRESS_TROUGH,
+        )
         style.configure(
             "Review.Treeview",
             background=SURFACE_COLOR,
@@ -122,13 +549,13 @@ class MainWindow:
             bordercolor=BORDER_COLOR,
             font=(FONT_FAMILY, 9, "bold"),
         )
-        style.map("Review.Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", TEXT_COLOR)])
+        style.map("Review.Treeview", background=[("selected", TREE_SELECTED_BG)], foreground=[("selected", TEXT_COLOR)])
 
     def _build_layout(self) -> None:
         page = tk.Frame(self.root, bg=BG_COLOR, padx=14, pady=12)
         page.pack(fill=tk.BOTH, expand=True)
         page.columnconfigure(0, weight=1)
-        page.rowconfigure(3, weight=1)
+        page.rowconfigure(3, weight=1, minsize=LOG_SECTION_MIN_HEIGHT)
 
         self._build_header(page)
         self._build_task_section(page)
@@ -136,7 +563,7 @@ class MainWindow:
         self._build_log_section(page)
 
     def _build_header(self, parent: tk.Frame) -> None:
-        header = tk.Frame(parent, bg=PRIMARY_COLOR, padx=16, pady=12)
+        header = tk.Frame(parent, bg=PRIMARY_COLOR, padx=12, pady=10)
         header.grid(row=0, column=0, sticky=tk.EW)
         header.columnconfigure(0, weight=1)
 
@@ -144,23 +571,23 @@ class MainWindow:
             header,
             text=f"{APP_NAME} {CURRENT_VERSION}",
             bg=PRIMARY_COLOR,
-            fg="#ffffff",
+            fg="#FFFFFF",
             font=(FONT_FAMILY, 16, "bold"),
         ).grid(row=0, column=0, sticky=tk.W)
         tk.Label(
             header,
             text="最多两组文件夹并行处理，支持预期箱号清单比对与结果表增量写入",
             bg=PRIMARY_COLOR,
-            fg="#dbeafe",
+            fg=PRIMARY_SUBTLE_FG,
             font=(FONT_FAMILY, 9),
         ).grid(row=1, column=0, sticky=tk.W, pady=(4, 0))
 
         status = tk.Label(
             header,
             textvariable=self.progress_var,
-            bg="#1e40af",
-            fg="#ffffff",
-            padx=12,
+            bg=STATUS_BG,
+            fg="#FFFFFF",
+            padx=10,
             pady=5,
             font=(FONT_FAMILY, 8, "bold"),
         )
@@ -169,27 +596,27 @@ class MainWindow:
     def _build_task_section(self, parent: tk.Frame) -> None:
         section = tk.Frame(parent, bg=BG_COLOR)
         self.task_section = section
-        section.grid(row=1, column=0, sticky=tk.EW, pady=(8, 0))
+        section.grid(row=1, column=0, sticky=tk.EW, pady=(12, 0))
         section.columnconfigure(0, weight=1)
 
         for index in range(MAX_TASKS):
             task_frame = tk.Frame(
                 section,
                 bg=SURFACE_COLOR,
-                padx=10,
-                pady=6,
                 highlightbackground=BORDER_COLOR,
                 highlightthickness=1,
+                padx=10,
+                pady=7,
             )
-            task_frame.grid(row=index, column=0, sticky=tk.EW, pady=(0, 5))
+            task_frame.grid(row=index, column=0, sticky=tk.EW, pady=(0, 6))
             task_frame.columnconfigure(1, weight=1)
 
             input_var = tk.StringVar()
             output_var = tk.StringVar()
             expected_var = tk.StringVar()
             badge_text = "\u5fc5\u586b" if index == 0 else "\u53ef\u9009"
-            badge_bg = "#dbeafe" if index == 0 else "#eef2f7"
-            badge_fg = PRIMARY_COLOR if index == 0 else MUTED_TEXT_COLOR
+            badge_bg = BADGE_BG
+            badge_fg = BADGE_FG
 
             header_box = tk.Frame(task_frame, bg=SURFACE_COLOR)
             header_box.grid(row=0, column=0, sticky=tk.W, pady=(0, 4))
@@ -232,10 +659,10 @@ class MainWindow:
                 anchor=tk.E,
             ).grid(row=0, column=1, sticky=tk.E)
             progressbar = ttk.Progressbar(progress_cell, mode="determinate", maximum=1, value=0, style="Horizontal.TProgressbar")
-            progressbar.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(2, 0))
+            progressbar.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(1, 0))
 
             result_menu_button = self._build_result_menu(task_frame, index)
-            result_menu_button.grid(row=0, column=2, sticky=tk.E, pady=(0, 4))
+            result_menu_button.grid(row=0, column=2, sticky=tk.E, pady=(0, 6))
             result_menu_button.grid_remove()
 
 
@@ -270,7 +697,7 @@ class MainWindow:
                 task_frame,
                 textvariable=output_status_var,
                 bg=SURFACE_COLOR,
-                fg=DANGER_COLOR,
+                fg=ERROR_TEXT_COLOR,
                 font=(FONT_FAMILY, 8),
                 anchor=tk.W,
             )
@@ -298,34 +725,45 @@ class MainWindow:
             expected_status_label.grid(row=6, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 1))
 
             completion_summary_var = tk.StringVar()
-            completion_panel = tk.Frame(task_frame, bg="#eff6ff", padx=8, pady=6)
-            completion_panel.grid(row=7, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))
+            completion_panel = tk.Frame(
+                task_frame,
+                bg=SUCCESS_SURFACE,
+                highlightbackground=SUCCESS_BORDER,
+                highlightthickness=1,
+                padx=8,
+                pady=5,
+            )
+            completion_panel.grid(row=7, column=0, columnspan=3, sticky=tk.EW, pady=(6, 0))
             completion_panel.columnconfigure(0, weight=1)
             tk.Label(
                 completion_panel,
                 textvariable=completion_summary_var,
-                bg="#eff6ff",
+                bg=SUCCESS_SURFACE,
                 fg=TEXT_COLOR,
                 font=(FONT_FAMILY, 8, "bold"),
             ).grid(row=0, column=0, sticky=tk.W)
-            tk.Button(
+            review_button = tk.Button(
                 completion_panel,
                 text="\u67e5\u770b\u5f85\u786e\u8ba4",
                 command=lambda task_index=index: self._open_review_dialog(task_index),
-                bg=SURFACE_COLOR,
-                fg=PRIMARY_COLOR,
+                bg=BUTTON_BROWSE,
+                activebackground=BUTTON_BROWSE_HOVER,
+                fg=SECONDARY_FG,
                 relief=tk.FLAT,
                 cursor="hand2",
                 padx=9,
                 pady=4,
                 font=(FONT_FAMILY, 8, "bold"),
-            ).grid(row=0, column=1, padx=(6, 3))
+            )
+            review_button.grid(row=0, column=1, padx=(6, 3))
+            review_button.grid_remove()
             safe_organize_button = tk.Button(
                 completion_panel,
                 text="安全整理（0）",
                 command=lambda task_index=index: self._auto_confirm_expected(task_index),
-                bg="#dcfce7",
-                fg="#166534",
+                bg=BUTTON_START,
+                activebackground=BUTTON_START_HOVER,
+                fg="#FFFFFF",
                 relief=tk.FLAT,
                 cursor="hand2",
                 padx=9,
@@ -338,8 +776,9 @@ class MainWindow:
                 completion_panel,
                 text="\u6b63\u786e\u8bc6\u522b",
                 command=lambda task_index=index: self._open_output_path(task_index, "success"),
-                bg=SURFACE_COLOR,
-                fg=PRIMARY_COLOR,
+                bg=BUTTON_BROWSE,
+                activebackground=BUTTON_BROWSE_HOVER,
+                fg=SECONDARY_FG,
                 relief=tk.FLAT,
                 cursor="hand2",
                 padx=9,
@@ -350,8 +789,9 @@ class MainWindow:
                 completion_panel,
                 text="\u8f93\u51fa\u76ee\u5f55",
                 command=lambda task_index=index: self._open_output_path(task_index, "output"),
-                bg=PRIMARY_COLOR,
-                fg="#ffffff",
+                bg=BUTTON_BROWSE,
+                activebackground=BUTTON_BROWSE_HOVER,
+                fg=SECONDARY_FG,
                 relief=tk.FLAT,
                 cursor="hand2",
                 padx=9,
@@ -378,6 +818,7 @@ class MainWindow:
                     "result_menu_button": result_menu_button,
                     "completion_summary_var": completion_summary_var,
                     "completion_panel": completion_panel,
+                    "review_button": review_button,
                     "safe_organize_button": safe_organize_button,
                     "input_label": input_label,
                     "output_label": output_label,
@@ -408,15 +849,15 @@ class MainWindow:
             expected_entry.bind("<FocusOut>", lambda _event, task_index=index: self._expected_path_changed(task_index))
         self.task_rows[1]["task_frame"].grid_remove()
         controls = tk.Frame(section, bg=BG_COLOR)
-        controls.grid(row=MAX_TASKS, column=0, sticky=tk.EW, pady=(0, 6))
+        controls.grid(row=MAX_TASKS, column=0, sticky=tk.EW, pady=(0, 8))
         self.task_two_toggle_button = tk.Button(
             controls,
             text="+ \u6dfb\u52a0\u7b2c\u4e8c\u7ec4\u4efb\u52a1",
             command=self._toggle_task_two,
-            bg="#eef4ff",
-            fg=PRIMARY_COLOR,
-            activebackground="#dbeafe",
-            activeforeground=PRIMARY_HOVER,
+            bg=BUTTON_BROWSE,
+            fg=SECONDARY_FG,
+            activebackground=BUTTON_BROWSE_HOVER,
+            activeforeground=SECONDARY_FG,
             relief=tk.FLAT,
             cursor="hand2",
             padx=12,
@@ -424,8 +865,6 @@ class MainWindow:
             font=(FONT_FAMILY, 8, "bold"),
         )
         self.task_two_toggle_button.grid(row=0, column=0, sticky=tk.W)
-
-
 
     def _build_path_field(
         self,
@@ -440,41 +879,41 @@ class MainWindow:
             text=label_text,
             bg=SURFACE_COLOR,
             fg=MUTED_TEXT_COLOR,
-            font=(FONT_FAMILY, 8),
+            font=(FONT_FAMILY, 9),
             width=16,
             anchor=tk.W,
         )
-        label.grid(row=row, column=0, sticky=tk.W, pady=2)
+        label.grid(row=row, column=0, sticky=tk.W, pady=1)
+
 
         entry = tk.Entry(
             parent,
             textvariable=variable,
-            bg=SURFACE_MUTED,
+            bg=INPUT_BG,
             fg=TEXT_COLOR,
             relief=tk.FLAT,
             insertbackground=TEXT_COLOR,
-            font=(FONT_FAMILY, 8),
+            font=(FONT_FAMILY, 9),
             highlightbackground=BORDER_COLOR,
             highlightcolor=PRIMARY_COLOR,
             highlightthickness=1,
         )
-        entry.grid(row=row, column=1, sticky=tk.EW, padx=(8, 8), pady=3, ipady=4)
-
+        entry.grid(row=row, column=1, sticky=tk.EW, padx=(8, 8), pady=2, ipady=2)
         button = tk.Button(
             parent,
             text="浏览",
             command=command,
-            bg="#eef4ff",
-            fg=PRIMARY_COLOR,
-            activebackground="#dbeafe",
-            activeforeground=PRIMARY_HOVER,
+            bg=BUTTON_BROWSE,
+            fg=SECONDARY_FG,
+            activebackground=BUTTON_BROWSE_HOVER,
+            activeforeground=SECONDARY_FG,
             relief=tk.FLAT,
             cursor="hand2",
             padx=12,
             pady=5,
             font=(FONT_FAMILY, 8, "bold"),
         )
-        button.grid(row=row, column=2, sticky=tk.E, pady=3)
+        button.grid(row=row, column=2, sticky=tk.E, pady=2)
         return label, entry, button
 
     def _toggle_task_two(self) -> None:
@@ -496,11 +935,11 @@ class MainWindow:
         button = tk.Menubutton(
             parent,
             text="\u6253\u5f00\u7ed3\u679c",
-            bg="#eef4ff",
-            fg=PRIMARY_COLOR,
-            activebackground="#dbeafe",
-            activeforeground=PRIMARY_HOVER,
-            disabledforeground="#ffffff",
+            bg=BUTTON_BROWSE,
+            fg=SECONDARY_FG,
+            activebackground=BUTTON_BROWSE_HOVER,
+            activeforeground=SECONDARY_FG,
+            disabledforeground=DISABLED_FG,
             relief=tk.FLAT,
             cursor="arrow",
             padx=10,
@@ -541,15 +980,17 @@ class MainWindow:
         button_box.grid(row=0, column=1, sticky=tk.E)
         speed_box = tk.Frame(button_box, bg=BG_COLOR)
         speed_box.grid(row=0, column=0, padx=(0, 10))
+        speed_controls = tk.Frame(speed_box, bg=BG_COLOR)
+        speed_controls.grid(row=0, column=0, sticky=tk.W)
         tk.Label(
-            speed_box,
+            speed_controls,
             text="\u901f\u5ea6\u6a21\u5f0f",
             bg=BG_COLOR,
             fg=MUTED_TEXT_COLOR,
             font=(FONT_FAMILY, 8),
         ).grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
         self.speed_menu = tk.OptionMenu(
-            speed_box,
+            speed_controls,
             self.speed_mode_var,
             SPEED_MODE_LABELS[OCR_SPEED_STABLE],
             SPEED_MODE_LABELS[OCR_SPEED_BALANCED],
@@ -559,7 +1000,7 @@ class MainWindow:
         self.speed_menu.config(
             bg=SURFACE_COLOR,
             fg=TEXT_COLOR,
-            activebackground="#dbeafe",
+            activebackground=SURFACE_MUTED,
             activeforeground=PRIMARY_HOVER,
             relief=tk.FLAT,
             cursor="hand2",
@@ -570,7 +1011,7 @@ class MainWindow:
             highlightthickness=1,
         )
         self.speed_menu["menu"].config(font=(FONT_FAMILY, 8))
-        self.speed_menu.grid(row=0, column=1, sticky=tk.E)
+        self.speed_menu.grid(row=0, column=1)
         tk.Label(
             speed_box,
             textvariable=self.speed_description_var,
@@ -578,29 +1019,33 @@ class MainWindow:
             fg=MUTED_TEXT_COLOR,
             font=(FONT_FAMILY, 8),
             anchor=tk.W,
-        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(3, 0))
-        self.sample_button = tk.Button(
+        ).grid(row=1, column=0, sticky=tk.W, pady=(3, 0))
+        self.advanced_tools_button = tk.Menubutton(
             button_box,
-            text="样本验收",
-            command=self._verify_samples,
-            bg="#eef4ff",
-            fg=PRIMARY_COLOR,
-            activebackground="#dbeafe",
-            activeforeground=PRIMARY_HOVER,
+            text="高级工具",
+            bg=BUTTON_SAMPLE,
+            fg=SECONDARY_FG,
+            activebackground=BUTTON_SAMPLE_HOVER,
+            activeforeground=SECONDARY_FG,
+            disabledforeground=DISABLED_FG,
             relief=tk.FLAT,
             cursor="hand2",
             padx=14,
             pady=8,
             font=(FONT_FAMILY, 9, "bold"),
         )
-        self.sample_button.grid(row=0, column=1, padx=(0, 8))
+        self.advanced_tools_menu = tk.Menu(self.advanced_tools_button, tearoff=False, font=(FONT_FAMILY, 8))
+        self.advanced_tools_menu.add_command(label="环境检查", command=self._run_environment_check)
+        self.advanced_tools_menu.add_command(label="导出诊断信息", command=self._export_diagnostics)
+        self.advanced_tools_button.configure(menu=self.advanced_tools_menu)
+        self.advanced_tools_button.grid(row=0, column=1, padx=(0, 8))
         self.start_button = tk.Button(
             button_box,
             text="开始处理",
             command=self._start,
-            bg=PRIMARY_COLOR,
+            bg=BUTTON_START,
             fg="#ffffff",
-            activebackground=PRIMARY_HOVER,
+            activebackground=BUTTON_START_HOVER,
             activeforeground="#ffffff",
             relief=tk.FLAT,
             cursor="hand2",
@@ -613,11 +1058,11 @@ class MainWindow:
             button_box,
             text="停止处理",
             command=self._stop,
-            bg=DANGER_COLOR,
-            fg="#ffffff",
+            bg=DISABLED_BG,
+            fg=DISABLED_FG,
             activebackground=DANGER_HOVER,
             activeforeground="#ffffff",
-            disabledforeground="#ffffff",
+            disabledforeground=DISABLED_FG,
             relief=tk.FLAT,
             cursor="hand2",
             padx=18,
@@ -632,10 +1077,10 @@ class MainWindow:
         panel = tk.Frame(
             parent,
             bg=SURFACE_COLOR,
-            padx=10,
-            pady=8,
             highlightbackground=BORDER_COLOR,
             highlightthickness=1,
+            padx=12,
+            pady=10,
         )
         panel.grid(row=3, column=0, sticky=tk.NSEW)
         panel.columnconfigure(0, weight=1)
@@ -650,20 +1095,29 @@ class MainWindow:
         ).grid(row=0, column=0, sticky=tk.W, pady=(0, 6))
         tk.Label(
             panel,
-            text="实时显示环境检查、识别进度、失败原因和箱号比对结果",
+            text="识别进度、异常和比对结果",
             bg=SURFACE_COLOR,
             fg=MUTED_TEXT_COLOR,
             font=(FONT_FAMILY, 8),
         ).grid(row=0, column=0, sticky=tk.E, pady=(0, 6))
 
-        log_frame = tk.Frame(panel, bg=LOG_BG, highlightbackground="#1e293b", highlightthickness=1)
+        # Keep the rectangular text viewport inside the rounded edge.
+        log_frame = RoundedPanel(
+            panel,
+            fill=LOG_BG,
+            outer_bg=SURFACE_COLOR,
+            radius=10,
+            border_color=LOG_BORDER,
+            padx=4,
+            pady=4,
+        )
         log_frame.grid(row=1, column=0, sticky=tk.NSEW)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
         self.log_text = tk.Text(
             log_frame,
-            height=24,
+            height=16,
             wrap=tk.NONE,
             bg=LOG_BG,
             fg=LOG_FG,
@@ -677,9 +1131,20 @@ class MainWindow:
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         self.log_text.grid(row=0, column=0, sticky=tk.NSEW)
         log_scrollbar.grid(row=0, column=1, sticky=tk.NS)
-        self.log_text.tag_configure("placeholder", foreground="#94a3b8")
+        self.log_text.tag_configure("info", foreground=LOG_FG)
+        self.log_text.tag_configure("error", foreground=LOG_ERROR_FG)
+        self.log_text.tag_configure("placeholder", foreground=LOG_PLACEHOLDER_FG)
         self.log_text.insert(tk.END, LOG_PLACEHOLDER, "placeholder")
         self.log_has_placeholder = True
+        watermark = tk.Label(
+            log_frame,
+            text="✦",
+            bg=LOG_BG,
+            fg=LOG_WATERMARK,
+            font=(FONT_FAMILY, 22),
+            borderwidth=0,
+        )
+        watermark.place(relx=0.97, rely=0.94, anchor=tk.SE)
 
     def _choose_input(self, task_index: int) -> None:
         if self.running:
@@ -707,7 +1172,7 @@ class MainWindow:
         if not input_dir.is_dir():
             row["input_status_var"].set("\u8f93\u5165\u6587\u4ef6\u5939\u4e0d\u5b58\u5728")
             row["input_status_label"].grid()
-            row["input_status_label"].config(fg=DANGER_COLOR)
+            row["input_status_label"].config(fg=ERROR_TEXT_COLOR)
             row["input_ready"] = False
             row["supported_file_count"] = 0
             row["input_scanning"] = False
@@ -790,10 +1255,10 @@ class MainWindow:
         output_name = Path(row["output_var"].get().strip()).name
         if error:
             row["input_status_var"].set(f"\u65e0\u6cd5\u626b\u63cf\u8f93\u5165\u6587\u4ef6\u5939\uff1a{error}")
-            row["input_status_label"].config(fg=DANGER_COLOR)
+            row["input_status_label"].config(fg=ERROR_TEXT_COLOR)
         elif count == 0:
             row["input_status_var"].set("\u672a\u53d1\u73b0\u53ef\u5904\u7406\u7684 PDF \u6216\u56fe\u7247\u6587\u4ef6")
-            row["input_status_label"].config(fg=DANGER_COLOR)
+            row["input_status_label"].config(fg=ERROR_TEXT_COLOR)
         else:
             row["input_status_var"].set(
                 f"\u68c0\u6d4b\u5230 {count} \u4e2a\u53ef\u5904\u7406\u6587\u4ef6 | \u8f93\u51fa\uff1a{output_name}"
@@ -846,7 +1311,7 @@ class MainWindow:
         row["output_valid"] = False
         row["output_status_var"].set(message)
         row["output_status_label"].grid()
-        row["output_status_label"].config(fg=DANGER_COLOR)
+        row["output_status_label"].config(fg=ERROR_TEXT_COLOR)
 
     def _output_path_changed(self, task_index: int) -> None:
         if self.running:
@@ -870,7 +1335,7 @@ class MainWindow:
         if not expected_path.is_file():
             row["expected_valid"] = False
             row["expected_status_var"].set("\u9884\u671f\u7bb1\u53f7\u6e05\u5355\u4e0d\u5b58\u5728\u6216\u4e0d\u662f\u6587\u4ef6")
-            row["expected_status_label"].config(fg=DANGER_COLOR)
+            row["expected_status_label"].config(fg=ERROR_TEXT_COLOR)
         else:
             row["expected_valid"] = self._update_expected_status(task_index, expected_path)
         self._refresh_start_button_state()
@@ -978,7 +1443,7 @@ class MainWindow:
             return
 
         self.cancel_event.set()
-        self.stop_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
+        self.stop_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
         self.action_hint_var.set("正在停止当前任务...")
         self._append_log("正在停止...")
 
@@ -1054,33 +1519,33 @@ class MainWindow:
         self._show_completion_panels()
 
     def _set_running_controls(self) -> None:
-        self.start_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
+        self.start_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
         self.action_hint_var.set("处理中，路径已锁定；可点击“停止处理”结束当前任务。")
-        self.sample_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
-        self.stop_button.config(state=tk.NORMAL, bg=DANGER_COLOR, cursor="hand2")
-        self.speed_menu.config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
-        self.task_two_toggle_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
+        self.advanced_tools_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
+        self.stop_button.config(state=tk.NORMAL, bg=DANGER_COLOR, fg="#FFFFFF", cursor="hand2")
+        self.speed_menu.config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
+        self.task_two_toggle_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
         for row in self.task_rows:
-            row["input_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
-            row["output_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
-            row["expected_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
-            row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
-            row["input_entry"].config(state=tk.DISABLED, disabledbackground="#eef2f7", disabledforeground=MUTED_TEXT_COLOR)
-            row["output_entry"].config(state=tk.DISABLED, disabledbackground="#eef2f7", disabledforeground=MUTED_TEXT_COLOR)
-            row["expected_entry"].config(state=tk.DISABLED, disabledbackground="#eef2f7", disabledforeground=MUTED_TEXT_COLOR)
+            row["input_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
+            row["output_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
+            row["expected_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
+            row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
+            row["input_entry"].config(state=tk.DISABLED, disabledbackground=DISABLED_INPUT_BG, disabledforeground=MUTED_TEXT_COLOR)
+            row["output_entry"].config(state=tk.DISABLED, disabledbackground=DISABLED_INPUT_BG, disabledforeground=MUTED_TEXT_COLOR)
+            row["expected_entry"].config(state=tk.DISABLED, disabledbackground=DISABLED_INPUT_BG, disabledforeground=MUTED_TEXT_COLOR)
 
     def _set_idle_controls(self) -> None:
-        self.sample_button.config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
-        self.stop_button.config(state=tk.DISABLED, bg=DISABLED_BG, cursor="arrow")
+        self.advanced_tools_button.config(state=tk.NORMAL, bg=BUTTON_SAMPLE, fg=SECONDARY_FG, cursor="hand2")
+        self.stop_button.config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
         self.speed_menu.config(state=tk.NORMAL, bg=SURFACE_COLOR, fg=TEXT_COLOR, cursor="hand2")
-        self.task_two_toggle_button.config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
+        self.task_two_toggle_button.config(state=tk.NORMAL, bg=BUTTON_BROWSE, fg=SECONDARY_FG, cursor="hand2")
         for row in self.task_rows:
-            row["input_button"].config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
-            row["output_button"].config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
-            row["expected_button"].config(state=tk.NORMAL, bg="#eef4ff", fg=PRIMARY_COLOR, cursor="hand2")
-            row["input_entry"].config(state=tk.NORMAL, bg=SURFACE_MUTED, fg=TEXT_COLOR)
-            row["output_entry"].config(state=tk.NORMAL, bg=SURFACE_MUTED, fg=TEXT_COLOR)
-            row["expected_entry"].config(state=tk.NORMAL, bg=SURFACE_MUTED, fg=TEXT_COLOR)
+            row["input_button"].config(state=tk.NORMAL, bg=BUTTON_BROWSE, fg=SECONDARY_FG, cursor="hand2")
+            row["output_button"].config(state=tk.NORMAL, bg=BUTTON_BROWSE, fg=SECONDARY_FG, cursor="hand2")
+            row["expected_button"].config(state=tk.NORMAL, bg=BUTTON_BROWSE, fg=SECONDARY_FG, cursor="hand2")
+            row["input_entry"].config(state=tk.NORMAL, bg=INPUT_BG, fg=TEXT_COLOR)
+            row["output_entry"].config(state=tk.NORMAL, bg=INPUT_BG, fg=TEXT_COLOR)
+            row["expected_entry"].config(state=tk.NORMAL, bg=INPUT_BG, fg=TEXT_COLOR)
 
         self._refresh_start_button_state()
 
@@ -1092,7 +1557,8 @@ class MainWindow:
             self.action_hint_var.set(message)
         self.start_button.config(
             state=tk.NORMAL if ready else tk.DISABLED,
-            bg=PRIMARY_COLOR if ready else DISABLED_BG,
+            fg="#FFFFFF" if ready else DISABLED_FG,
+            bg=BUTTON_START if ready else DISABLED_BG,
             cursor="hand2" if ready else "arrow",
         )
 
@@ -1101,7 +1567,7 @@ class MainWindow:
             if self.log_has_placeholder:
                 self.log_text.delete("1.0", tk.END)
                 self.log_has_placeholder = False
-            self.log_text.insert(tk.END, f"{message}\n")
+            self.log_text.insert(tk.END, f"{message}\n", _log_tag_for_message(message))
             self.log_text.see(tk.END)
             self.progress_var.set(message)
 
@@ -1160,7 +1626,7 @@ class MainWindow:
             inspection = inspect_expected_codes(expected_path)
         except Exception as exc:
             row["expected_status_var"].set(f"清单读取失败: {exc}")
-            row["expected_status_label"].config(fg=DANGER_COLOR)
+            row["expected_status_label"].config(fg=ERROR_TEXT_COLOR)
             return False
 
         preview = ", ".join(inspection.valid_codes[:3])
@@ -1169,7 +1635,7 @@ class MainWindow:
             f"清单校验：有效 {inspection.valid_count} | "
             f"重复 {inspection.duplicate_count} | 无效 {inspection.invalid_count}{preview_text}"
         )
-        row["expected_status_label"].config(fg=DANGER_COLOR if inspection.invalid_count else MUTED_TEXT_COLOR)
+        row["expected_status_label"].config(fg=ERROR_TEXT_COLOR if inspection.invalid_count else MUTED_TEXT_COLOR)
         return inspection.valid_count > 0
 
     def _validate_expected_list(self, task_index: int, expected_path: Path) -> bool:
@@ -1195,9 +1661,10 @@ class MainWindow:
             row["progress_text_var"].set("待处理" if enabled else "未启用")
             row["summary_var"].set("已处理 0/0 | 成功 0 | 未识别 0 | 箱号错误 0")
             row["progressbar"].config(maximum=1, value=0)
-            row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
+            row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
             row["result_menu_button"].grid_remove()
             row["completion_panel"].grid_remove()
+            row["review_button"].grid_remove()
             row["safe_organize_button"].grid_remove()
 
     def _reset_single_task_progress(self, task_index: int) -> None:
@@ -1207,8 +1674,9 @@ class MainWindow:
         row["progress_text_var"].set("\u5f85\u5904\u7406")
         row["summary_var"].set("\u5df2\u5904\u7406 0/0 | \u6210\u529f 0 | \u672a\u8bc6\u522b 0 | \u7bb1\u53f7\u9519\u8bef 0")
         row["progressbar"].config(maximum=1, value=0)
-        row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg="#ffffff", cursor="arrow")
+        row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
         row["result_menu_button"].grid_remove()
+        row["review_button"].grid_remove()
         row["safe_organize_button"].grid_remove()
         row["completion_panel"].grid_remove()
     def _record_task_result(self, state: dict, status: RecognitionStatus) -> None:
@@ -1272,8 +1740,8 @@ class MainWindow:
             if output_dir.exists():
                 self.task_rows[index]["result_menu_button"].config(
                     state=tk.NORMAL,
-                    bg="#eef4ff",
-                    fg=PRIMARY_COLOR,
+                    bg=BUTTON_BROWSE,
+                    fg=SECONDARY_FG,
                     cursor="hand2",
                 )
                 self.task_rows[index]["result_menu_button"].grid()
@@ -1282,17 +1750,34 @@ class MainWindow:
         for index, row in enumerate(self.task_rows):
             if index >= len(self.active_output_dirs) or index >= len(self.task_progress_states):
                 row["completion_panel"].grid_remove()
+                row["review_button"].grid_remove()
                 row["safe_organize_button"].grid_remove()
                 continue
             output_dir = self.active_output_dirs[index]
             state = self.task_progress_states[index]
             if not output_dir.exists() or state.get("started_at") is None:
                 row["completion_panel"].grid_remove()
+                row["review_button"].grid_remove()
                 row["safe_organize_button"].grid_remove()
                 continue
             row["completion_summary_var"].set(_completion_summary(state))
             row["completion_panel"].grid()
+            self._refresh_review_button(index, output_dir)
             self._refresh_safe_organize_button(index, output_dir)
+
+    def _refresh_review_button(self, task_index: int, output_dir: Path) -> None:
+        row = self.task_rows[task_index]
+        button = row["review_button"]
+        button.grid_remove()
+        try:
+            review_count = len(scan_review_candidates(output_dir))
+        except OSError:
+            return
+        if review_count == 0:
+            return
+        button.config(text=f"??????{review_count}?")
+        button.grid()
+
 
     def _refresh_safe_organize_button(self, task_index: int, output_dir: Path) -> None:
         row = self.task_rows[task_index]
@@ -1341,11 +1826,11 @@ class MainWindow:
             return
 
         dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
         dialog.title("待确认文件")
         dialog.geometry("940x520")
         dialog.minsize(820, 420)
         dialog.transient(self.root)
-        dialog.grab_set()
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(0, weight=1)
 
@@ -1381,8 +1866,8 @@ class MainWindow:
         selected_items: set[str] = set()
         valid_candidate_count = sum(1 for candidate in candidates if candidate.valid)
         selection_summary_var = tk.StringVar(value=_review_selection_summary(0, valid_candidate_count))
-        tree.tag_configure("checked", background="#eff6ff", foreground=TEXT_COLOR)
-        tree.tag_configure("disabled", background="#f8fafc", foreground="#98a2b3")
+        tree.tag_configure("checked", background=REVIEW_SELECTED_BG, foreground=TEXT_COLOR)
+        tree.tag_configure("disabled", background=REVIEW_DISABLED_BG, foreground=REVIEW_DISABLED_FG)
 
         for candidate in candidates:
             item_id = tree.insert(
@@ -1492,8 +1977,8 @@ class MainWindow:
 
         hint_panel = tk.Frame(
             action_bar,
-            bg="#eff6ff",
-            highlightbackground="#bfdbfe",
+            bg=REVIEW_HINT_BG,
+            highlightbackground=REVIEW_HINT_BORDER,
             highlightthickness=1,
             padx=12,
             pady=9,
@@ -1506,15 +1991,15 @@ class MainWindow:
         tk.Label(
             hint_panel,
             text="操作提示",
-            bg="#eff6ff",
+            bg=REVIEW_HINT_BG,
             fg=PRIMARY_COLOR,
             font=(FONT_FAMILY, 9, "bold"),
         ).grid(row=0, column=1, sticky=tk.W)
         tk.Label(
             hint_panel,
             text="双击文件查看内容；确认箱号无误后，在“选择”列勾选文件，再点击“整理已确认文件”。",
-            bg="#eff6ff",
-            fg="#344054",
+            bg=REVIEW_HINT_BG,
+            fg=REVIEW_HINT_FG,
             font=(FONT_FAMILY, 9),
         ).grid(row=1, column=1, sticky=tk.W, pady=(2, 0))
 
@@ -1559,8 +2044,8 @@ class MainWindow:
             controls,
             text="全选可整理项",
             command=select_all,
-            bg="#eef4ff",
-            fg=PRIMARY_COLOR,
+            bg=BUTTON_BROWSE,
+            fg=SECONDARY_FG,
             relief=tk.FLAT,
             padx=14,
             pady=7,
@@ -1571,8 +2056,8 @@ class MainWindow:
             controls,
             text="取消全选",
             command=clear_all,
-            bg="#eef4ff",
-            fg=PRIMARY_COLOR,
+            bg=BUTTON_BROWSE,
+            fg=SECONDARY_FG,
             relief=tk.FLAT,
             padx=14,
             pady=7,
@@ -1583,15 +2068,18 @@ class MainWindow:
             controls,
             text="整理已确认文件",
             command=confirm_selected,
-            bg=PRIMARY_COLOR,
+            bg=BUTTON_START,
             fg="#ffffff",
-            activebackground=PRIMARY_HOVER,
+            activebackground=BUTTON_START_HOVER,
             relief=tk.FLAT,
             padx=16,
             pady=7,
             font=(FONT_FAMILY, 9, "bold"),
             cursor="hand2",
         ).grid(row=0, column=3, padx=(4, 0))
+        _center_dialog_on_screen(dialog)
+        dialog.deiconify()
+        dialog.grab_set()
 
     def _auto_confirm_expected(self, task_index: int) -> None:
         if self.running or task_index >= len(getattr(self, "active_output_dirs", [])):
@@ -1637,6 +2125,63 @@ class MainWindow:
         if summary.failures:
             message += "\n" + "\n".join(summary.failures[:5])
         messagebox.showinfo("整理完成", message, parent=parent)
+
+    def _collect_diagnostic_messages(self) -> tuple[AppConfig, list[str]]:
+        config = self._config_for_speed(default_config(work_dir=resolve_default_work_dir()))
+        return config, format_diagnostic_messages(inspect_environment(config))
+
+    def _run_environment_check(self) -> None:
+        if self.running:
+            return
+
+        try:
+            _config, messages = self._collect_diagnostic_messages()
+        except Exception as exc:
+            messagebox.showerror("环境检查", f"无法完成环境检查：{exc}", parent=self.root)
+            return
+
+        self._append_log("开始环境检查")
+        for message in messages:
+            self._append_log(message)
+
+        has_missing = any(message.startswith("[缺失]") for message in messages)
+        summary = "发现缺失项，请按操作说明处理。" if has_missing else "环境检查通过。"
+        messagebox.showinfo("环境检查", "\n".join([*messages, "", summary]), parent=self.root)
+
+    def _export_diagnostics(self) -> None:
+        if self.running:
+            return
+
+        try:
+            config, messages = self._collect_diagnostic_messages()
+        except Exception as exc:
+            messagebox.showerror("导出诊断信息", f"无法收集诊断信息：{exc}", parent=self.root)
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="导出诊断信息",
+            defaultextension=".txt",
+            initialfile=f"运单箱号识别分拣-诊断信息-{datetime.now():%Y%m%d-%H%M%S}.txt",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+        )
+        if not output_path:
+            return
+
+        report = _diagnostic_report_text(
+            config,
+            messages,
+            self.log_text.get("1.0", tk.END),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        try:
+            Path(output_path).write_text(report, encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("导出诊断信息", f"无法写入诊断文件：{exc}", parent=self.root)
+            return
+
+        self._append_log(f"诊断信息已导出：{output_path}")
+        messagebox.showinfo("导出诊断信息", "诊断信息已导出，可发送给维护人员协助排查。", parent=self.root)
 
     def _verify_samples(self) -> None:
         if self.running:
@@ -1687,11 +2232,11 @@ class MainWindow:
 
         result = {"mode": HISTORY_MODE_CANCEL}
         dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
         dialog.title("已有识别结果")
         dialog.configure(bg=SURFACE_COLOR)
         dialog.resizable(False, False)
         dialog.transient(self.root)
-        dialog.grab_set()
 
         body = tk.Frame(dialog, bg=SURFACE_COLOR, padx=20, pady=18)
         body.pack(fill=tk.BOTH, expand=True)
@@ -1731,9 +2276,9 @@ class MainWindow:
             actions,
             text="继续未完成文件（推荐）",
             command=lambda: choose(HISTORY_MODE_RESUME),
-            bg=PRIMARY_COLOR,
+            bg=BUTTON_START,
             fg="#ffffff",
-            activebackground=PRIMARY_HOVER,
+            activebackground=BUTTON_START_HOVER,
             activeforeground="#ffffff",
             relief=tk.FLAT,
             cursor="hand2",
@@ -1746,10 +2291,10 @@ class MainWindow:
             actions,
             text="重新识别当前输入内全部文件",
             command=lambda: choose(HISTORY_MODE_REPROCESS),
-            bg="#eef4ff",
-            fg=PRIMARY_COLOR,
-            activebackground="#dbeafe",
-            activeforeground=PRIMARY_HOVER,
+            bg=BUTTON_BROWSE,
+            fg=SECONDARY_FG,
+            activebackground=BUTTON_BROWSE_HOVER,
+            activeforeground=SECONDARY_FG,
             relief=tk.FLAT,
             cursor="hand2",
             padx=14,
@@ -1760,8 +2305,8 @@ class MainWindow:
             actions,
             text="取消",
             command=lambda: choose(HISTORY_MODE_CANCEL),
-            bg=SURFACE_MUTED,
-            fg=TEXT_COLOR,
+            bg=DANGER_COLOR,
+            fg="#FFFFFF",
             relief=tk.FLAT,
             cursor="hand2",
             padx=14,
@@ -1772,6 +2317,9 @@ class MainWindow:
         dialog.protocol("WM_DELETE_WINDOW", lambda: choose(HISTORY_MODE_CANCEL))
         dialog.bind("<Escape>", lambda _event: choose(HISTORY_MODE_CANCEL))
         dialog.bind("<Return>", lambda _event: choose(HISTORY_MODE_RESUME))
+        _center_dialog_on_screen(dialog)
+        dialog.deiconify()
+        dialog.grab_set()
         primary.focus_set()
         dialog.wait_window()
         return result["mode"]
