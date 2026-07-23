@@ -16,6 +16,28 @@ def test_main_window_layout_keeps_task_area_compact_for_log_visibility():
     assert "height=24" in source
     assert "\u8f93\u5165\u6587\u4ef6\u5939\u540d_\u8bc6\u522b\u8f93\u51fa" in source
     assert "\u9009\u62e9\u6587\u4ef6\uff0c\u4e0d\u662f\u6587\u4ef6\u5939" not in source
+    assert "\\u975e\\u5fc5\\u9009" not in source
+    assert "\\u9884\\u671f\\u7bb1\\u53f7\\u6e05\\u5355\\uff08\\u53ef\\u9009\\uff09" in source
+
+
+def test_startup_keeps_fields_empty_but_browsers_use_recent_directories(tmp_path: Path):
+    from waybill_ocr.ui import main_window
+
+    source = Path(main_window.__file__).read_text(encoding="utf-8")
+    recent_input = tmp_path / "recent-input"
+    recent_input.mkdir()
+    recent_list = tmp_path / "expected.txt"
+    recent_list.write_text("GESU5903360\n", encoding="utf-8")
+    window = SimpleNamespace(
+        preferences={
+            "input_dir": str(recent_input),
+            "expected_path": str(recent_list),
+        }
+    )
+
+    assert "_restore_recent_paths" not in source
+    assert main_window.MainWindow._recent_dir(window, "input_dir") == str(recent_input)
+    assert main_window.MainWindow._recent_dir(window, "expected_path") == str(tmp_path)
 
 
 class FakeVar:

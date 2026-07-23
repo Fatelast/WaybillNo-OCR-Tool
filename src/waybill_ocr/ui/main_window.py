@@ -84,7 +84,6 @@ class MainWindow:
 
         self._configure_style()
         self._build_layout()
-        self._restore_recent_paths()
         self.root.after(1000, self._refresh_task_durations)
 
     def run(self) -> None:
@@ -243,13 +242,13 @@ class MainWindow:
             expected_entry, expected_button = self._build_path_field(
                 task_frame,
                 3,
-                "\u9884\u671f\u7bb1\u53f7\u6e05\u5355\uff08\u975e\u5fc5\u9009\uff09",
+                "\u9884\u671f\u7bb1\u53f7\u6e05\u5355\uff08\u53ef\u9009\uff09",
                 expected_var,
                 lambda task_index=index: self._choose_expected(task_index),
             )
 
             expected_status_var = tk.StringVar(
-                value="\u9884\u671f\u6e05\u5355\uff1a\u975e\u5fc5\u9009\uff1b\u652f\u6301 .txt / .csv / .xlsx\uff1b\u5efa\u8bae\u6bcf\u884c\u4e00\u4e2a\u7bb1\u53f7\u3002"
+                value="\u9884\u671f\u6e05\u5355\uff1a\u53ef\u9009\uff1b\u652f\u6301 .txt / .csv / .xlsx\uff1b\u5efa\u8bae\u6bcf\u884c\u4e00\u4e2a\u7bb1\u53f7\u3002"
             )
             expected_status_label = tk.Label(
                 task_frame,
@@ -1239,16 +1238,6 @@ class MainWindow:
         self.preferences[key] = value
         save_preferences(self.preferences)
 
-    def _restore_recent_paths(self) -> None:
-        if not self.task_rows:
-            return
-        first_row = self.task_rows[0]
-        if self.preferences.get("input_dir"):
-            first_row["input_var"].set(self.preferences["input_dir"])
-        if self.preferences.get("output_dir"):
-            first_row["output_var"].set(self.preferences["output_dir"])
-        if self.preferences.get("expected_path"):
-            first_row["expected_var"].set(self.preferences["expected_path"])
 
     def _save_recent_task_paths(self, tasks: list[DirectoryTask]) -> None:
         if not tasks:
