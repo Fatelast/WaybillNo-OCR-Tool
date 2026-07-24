@@ -860,6 +860,7 @@ class MainWindow:
             expected_status_label.grid(row=6, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(0, 1))
 
             completion_summary_var = tk.StringVar()
+            completion_guidance_var = tk.StringVar()
             completion_panel = tk.Frame(
                 task_frame,
                 bg=SUCCESS_SURFACE,
@@ -877,13 +878,21 @@ class MainWindow:
                 fg=TEXT_COLOR,
                 font=(FONT_FAMILY, 8, "bold"),
             ).grid(row=0, column=0, sticky=tk.W)
+            tk.Label(
+                completion_panel,
+                textvariable=completion_guidance_var,
+                bg=SUCCESS_SURFACE,
+                fg=PRIMARY_COLOR,
+                font=(FONT_FAMILY, 8, "bold"),
+                anchor=tk.W,
+            ).grid(row=1, column=0, columnspan=5, sticky=tk.W, pady=(4, 0))
             review_button = RoundedButton(
                 completion_panel,
                 text="\u67e5\u770b\u5f85\u786e\u8ba4",
                 command=lambda task_index=index: self._open_review_dialog(task_index),
-                bg=BUTTON_BROWSE,
-                activebackground=BUTTON_BROWSE_HOVER,
-                fg=SECONDARY_FG,
+                bg=BUTTON_START,
+                activebackground=BUTTON_START_HOVER,
+                fg="#FFFFFF",
                 relief=tk.FLAT,
                 cursor="hand2",
                 padx=9,
@@ -905,12 +914,27 @@ class MainWindow:
                 pady=4,
                 font=(FONT_FAMILY, 8, "bold"),
             )
-            safe_organize_button.grid(row=0, column=2, padx=3)
+            safe_organize_button.grid(row=0, column=1, padx=(6, 3))
             safe_organize_button.grid_remove()
-            RoundedButton(
+            completion_primary_button = RoundedButton(
                 completion_panel,
-                text="\u6b63\u786e\u8bc6\u522b",
+                text="\u6253\u5f00\u6b63\u786e\u8bc6\u522b",
                 command=lambda task_index=index: self._open_output_path(task_index, "success"),
+                bg=BUTTON_START,
+                activebackground=BUTTON_START_HOVER,
+                fg="#FFFFFF",
+                relief=tk.FLAT,
+                cursor="hand2",
+                padx=9,
+                pady=4,
+                font=(FONT_FAMILY, 8, "bold"),
+            )
+            completion_primary_button.grid(row=0, column=1, padx=(6, 3))
+            completion_primary_button.grid_remove()
+            completion_excel_button = RoundedButton(
+                completion_panel,
+                text="\u67e5\u770b Excel",
+                command=lambda task_index=index: self._open_output_path(task_index, "excel"),
                 bg=BUTTON_BROWSE,
                 activebackground=BUTTON_BROWSE_HOVER,
                 fg=SECONDARY_FG,
@@ -919,10 +943,11 @@ class MainWindow:
                 padx=9,
                 pady=4,
                 font=(FONT_FAMILY, 8, "bold"),
-            ).grid(row=0, column=3, padx=3)
-            RoundedButton(
+            )
+            completion_excel_button.grid(row=0, column=2, padx=3)
+            completion_output_button = RoundedButton(
                 completion_panel,
-                text="\u8f93\u51fa\u76ee\u5f55",
+                text="\u6253\u5f00\u8f93\u51fa\u76ee\u5f55",
                 command=lambda task_index=index: self._open_output_path(task_index, "output"),
                 bg=BUTTON_BROWSE,
                 activebackground=BUTTON_BROWSE_HOVER,
@@ -932,7 +957,8 @@ class MainWindow:
                 padx=9,
                 pady=4,
                 font=(FONT_FAMILY, 8, "bold"),
-            ).grid(row=0, column=4, padx=(3, 0))
+            )
+            completion_output_button.grid(row=0, column=3, padx=(3, 0))
             completion_panel.grid_remove()
 
             self.task_rows.append(
@@ -953,9 +979,13 @@ class MainWindow:
                     "result_menu_button": result_menu_button,
                     "completion_summary_var": completion_summary_var,
                     "completion_panel": completion_panel,
+                    "completion_guidance_var": completion_guidance_var,
                     "review_button": review_button,
                     "safe_organize_button": safe_organize_button,
                     "input_label": input_label,
+                    "completion_primary_button": completion_primary_button,
+                    "completion_excel_button": completion_excel_button,
+                    "completion_output_button": completion_output_button,
                     "output_label": output_label,
                     "expected_label": expected_label,
                     "input_entry": input_entry,
@@ -1069,7 +1099,7 @@ class MainWindow:
     def _build_result_menu(self, parent: tk.Frame, task_index: int) -> tk.Menubutton:
         button = RoundedMenubutton(
             parent,
-            text="\u6253\u5f00\u7ed3\u679c",
+            text="\u7ed3\u679c\u4e0e\u6574\u7406 \u25be",
             bg=BUTTON_BROWSE,
             fg=SECONDARY_FG,
             activebackground=BUTTON_BROWSE_HOVER,
@@ -1083,6 +1113,7 @@ class MainWindow:
             state=tk.DISABLED,
         )
         menu = tk.Menu(button.control, tearoff=False, font=(FONT_FAMILY, 8))
+        menu.add_command(label="\u67e5\u770b\u7ed3\u679c", state=tk.DISABLED)
         menu.add_command(label="\u8f93\u51fa\u6587\u4ef6\u5939", command=lambda: self._open_output_path(task_index, "output"))
         menu.add_command(label="\u8bc6\u522b\u7ed3\u679c.xlsx", command=lambda: self._open_output_path(task_index, "excel"))
         menu.add_separator()
@@ -1090,9 +1121,11 @@ class MainWindow:
         menu.add_command(label="\u672a\u8bc6\u522b", command=lambda: self._open_output_path(task_index, "unrecognized"))
         menu.add_command(label="\u7bb1\u53f7\u9519\u8bef", command=lambda: self._open_output_path(task_index, "invalid"))
         menu.add_separator()
+        menu.add_command(label="\u6574\u7406\u590d\u6838", state=tk.DISABLED)
         menu.add_command(label="\u5f85\u786e\u8ba4\u6587\u4ef6", command=lambda: self._open_review_dialog(task_index))
         menu.add_command(label="\u6309\u9884\u671f\u6e05\u5355\u81ea\u52a8\u6574\u7406", command=lambda: self._auto_confirm_expected(task_index))
         menu.add_separator()
+        menu.add_command(label="\u91cd\u65b0\u5904\u7406", state=tk.DISABLED)
         menu.add_command(label="\u5931\u8d25\u6587\u4ef6\u91cd\u65b0\u8bc6\u522b", command=lambda: self._retry_failed_files(task_index))
         button.configure(menu=menu)
         return button
@@ -1800,6 +1833,7 @@ class MainWindow:
             row["result_menu_button"].grid_remove()
             row["completion_panel"].grid_remove()
             row["review_button"].grid_remove()
+            row["completion_primary_button"].grid_remove()
             row["safe_organize_button"].grid_remove()
 
     def _reset_single_task_progress(self, task_index: int) -> None:
@@ -1812,6 +1846,7 @@ class MainWindow:
         row["result_menu_button"].config(state=tk.DISABLED, bg=DISABLED_BG, fg=DISABLED_FG, cursor="arrow")
         row["result_menu_button"].grid_remove()
         row["review_button"].grid_remove()
+        row["completion_primary_button"].grid_remove()
         row["safe_organize_button"].grid_remove()
         row["completion_panel"].grid_remove()
     def _record_task_result(self, state: dict, status: RecognitionStatus) -> None:
@@ -1887,6 +1922,7 @@ class MainWindow:
                 row["completion_panel"].grid_remove()
                 row["review_button"].grid_remove()
                 row["safe_organize_button"].grid_remove()
+                row["completion_primary_button"].grid_remove()
                 continue
             output_dir = self.active_output_dirs[index]
             state = self.task_progress_states[index]
@@ -1894,45 +1930,95 @@ class MainWindow:
                 row["completion_panel"].grid_remove()
                 row["review_button"].grid_remove()
                 row["safe_organize_button"].grid_remove()
+                row["completion_primary_button"].grid_remove()
                 continue
             row["completion_summary_var"].set(_completion_summary(state))
             row["completion_panel"].grid()
-            self._refresh_review_button(index, output_dir)
-            self._refresh_safe_organize_button(index, output_dir)
+            review_count = self._refresh_review_button(index, output_dir)
+            safe_organize_count = self._refresh_safe_organize_button(index, output_dir)
+            self._show_completion_actions(index, state, review_count, safe_organize_count)
+            row["completion_guidance_var"].set(_completion_guidance_text(review_count, safe_organize_count))
 
-    def _refresh_review_button(self, task_index: int, output_dir: Path) -> None:
+    def _refresh_review_button(self, task_index: int, output_dir: Path) -> int:
         row = self.task_rows[task_index]
         button = row["review_button"]
         button.grid_remove()
         try:
             review_count = len(scan_review_candidates(output_dir))
         except OSError:
-            return
-        if review_count == 0:
-            return
-        button.config(text=f"??????{review_count}?")
-        button.grid()
+            return 0
+        button.config(text=f"\u67e5\u770b\u5f85\u786e\u8ba4\uff08{review_count}\uff09")
+        return review_count
 
 
-    def _refresh_safe_organize_button(self, task_index: int, output_dir: Path) -> None:
+    def _refresh_safe_organize_button(self, task_index: int, output_dir: Path) -> int:
         row = self.task_rows[task_index]
         button = row["safe_organize_button"]
         button.grid_remove()
         if task_index >= len(self.active_tasks):
-            return
+            return 0
         expected_path = self.active_tasks[task_index].expected_codes_path
         if expected_path is None or not expected_path.is_file():
-            return
+            return 0
         try:
             inspection = inspect_expected_codes(expected_path)
             candidates = expected_review_candidates(output_dir, inspection.valid_codes)
         except (OSError, ValueError):
-            return
+            return 0
         if not candidates:
-            return
+            return 0
         button.config(text=f"安全整理（{len(candidates)}）")
-        button.grid()
+        return len(candidates)
 
+
+    def _show_completion_actions(
+        self,
+        task_index: int,
+        state: dict,
+        review_count: int,
+        safe_organize_count: int,
+    ) -> None:
+        """Show one clear primary completion action and keep common results one click away."""
+        row = self.task_rows[task_index]
+        review_button = row["review_button"]
+        safe_organize_button = row["safe_organize_button"]
+        primary_button = row["completion_primary_button"]
+        excel_button = row["completion_excel_button"]
+        output_button = row["completion_output_button"]
+
+        for button in (review_button, safe_organize_button, primary_button):
+            button.grid_remove()
+
+        if safe_organize_count:
+            safe_organize_button.grid(row=0, column=1, padx=(6, 3))
+            if review_count:
+                review_button.config(
+                    bg=BUTTON_BROWSE,
+                    activebackground=BUTTON_BROWSE_HOVER,
+                    fg=SECONDARY_FG,
+                )
+                review_button.grid(row=0, column=2, padx=3)
+                excel_button.grid(row=0, column=3, padx=3)
+                output_button.grid(row=0, column=4, padx=(3, 0))
+                return
+        elif review_count:
+            review_button.config(
+                bg=BUTTON_START,
+                activebackground=BUTTON_START_HOVER,
+                fg="#FFFFFF",
+            )
+            review_button.grid(row=0, column=1, padx=(6, 3))
+        else:
+            has_success = state.get("success", 0) > 0
+            target = "success" if has_success else "output"
+            primary_button.config(
+                text="\u6253\u5f00\u6b63\u786e\u8bc6\u522b" if has_success else "\u6253\u5f00\u8f93\u51fa\u76ee\u5f55",
+                command=lambda path_target=target: self._open_output_path(task_index, path_target),
+            )
+            primary_button.grid(row=0, column=1, padx=(6, 3))
+
+        excel_button.grid(row=0, column=2, padx=3)
+        output_button.grid(row=0, column=3, padx=(3, 0))
 
     def _open_output_path(self, task_index: int, target: str) -> None:
         if task_index >= len(self.active_output_dirs):
@@ -2343,6 +2429,8 @@ class MainWindow:
         if not value:
             return None
         path = Path(value)
+        if key == "input_dir":
+            return str(path.parent)
         return str(path if path.is_dir() else path.parent)
 
     def _remember_path(self, key: str, value: str) -> None:
@@ -2575,6 +2663,18 @@ def _completion_summary(state: dict) -> str:
     elapsed = _format_task_duration(_task_elapsed_seconds(state))
     return f"\u5904\u7406\u7ed3\u675f\uff1a\u6210\u529f {state['success']} | \u5f85\u590d\u6838 {review_count} | \u7528\u65f6 {elapsed}"
 
+
+def _completion_guidance_text(review_count: int, safe_organize_count: int) -> str:
+    result_menu_label = "\u7ed3\u679c\u4e0e\u6574\u7406 \u25be"
+    if safe_organize_count:
+        next_step = "\u53ef\u5148\u5b89\u5168\u6574\u7406"
+    elif review_count:
+        next_step = "\u53ef\u67e5\u770b\u5f85\u786e\u8ba4\u6587\u4ef6"
+    else:
+        next_step = "\u53ef\u6253\u5f00\u7ed3\u679c\u8fdb\u884c\u9a8c\u6536"
+    return (
+        f"\u4e0b\u4e00\u6b65\uff1a{next_step}\uff1b\u66f4\u591a\u7ed3\u679c\u3001\u590d\u6838\u548c\u91cd\u65b0\u8bc6\u522b\u8bf7\u70b9\u51fb\u53f3\u4e0a\u89d2\u300c{result_menu_label}\u300d\u3002"
+    )
 
 def _is_input_inside_output(input_dir: Path, output_dir: Path) -> bool:
     resolved_input = input_dir.resolve()

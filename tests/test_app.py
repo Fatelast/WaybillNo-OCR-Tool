@@ -67,7 +67,7 @@ def test_startup_keeps_fields_empty_but_browsers_use_recent_directories(tmp_path
     )
 
     assert "_restore_recent_paths" not in source
-    assert main_window.MainWindow._recent_dir(window, "input_dir") == str(recent_input)
+    assert main_window.MainWindow._recent_dir(window, "input_dir") == str(recent_input.parent)
     assert main_window.MainWindow._recent_dir(window, "expected_path") == str(tmp_path)
 
 
@@ -254,7 +254,7 @@ def test_main_window_contains_sample_verify_and_result_entry_labels():
     source = (Path(__file__).resolve().parents[1] / "src" / "waybill_ocr" / "ui" / "main_window.py").read_text(encoding="utf-8")
 
     assert "\u6837\u672c\u9a8c\u6536" in source
-    assert "\\u6253\\u5f00\\u7ed3\\u679c" in source
+    assert "\\u7ed3\\u679c\\u4e0e\\u6574\\u7406 \\u25be" in source
     assert "button = RoundedMenubutton(" in source
     assert "progressbar = ttk.Progressbar(" in source
     assert "entry_shell" not in source
@@ -376,6 +376,13 @@ def test_main_window_keeps_expected_list_visible_and_removes_duplicate_review_en
     assert 'add_command(label="环境检查"' in source
     assert 'add_command(label="导出诊断信息"' in source
 
+def test_completion_guidance_explains_the_next_operator_action():
+    from waybill_ocr.ui import main_window
+
+    assert "\u5b89\u5168\u6574\u7406" in main_window._completion_guidance_text(0, 1)
+    assert "\u67e5\u770b\u5f85\u786e\u8ba4\u6587\u4ef6" in main_window._completion_guidance_text(1, 0)
+    assert "\u6253\u5f00\u7ed3\u679c\u8fdb\u884c\u9a8c\u6536" in main_window._completion_guidance_text(0, 0)
+    assert "\u7ed3\u679c\u4e0e\u6574\u7406 \u25be" in main_window._completion_guidance_text(0, 0)
 class FakeWidget:
     def __init__(self) -> None:
         self.options = {}
@@ -529,7 +536,7 @@ def test_existing_result_outputs_only_returns_tasks_with_workbooks(tmp_path: Pat
     assert _existing_result_outputs(tasks) == [first]
 
 
-def test_safe_organize_button_uses_shared_candidate_count(tmp_path: Path):
+def test_safe_organize_button_reports_shared_candidate_count(tmp_path: Path):
     from waybill_ocr.ui import main_window
     from waybill_ocr.ui.task_runner import DirectoryTask
 
@@ -544,17 +551,17 @@ def test_safe_organize_button_uses_shared_candidate_count(tmp_path: Path):
     task = DirectoryTask(tmp_path / "input", output_dir, "task", expected_path)
     window = SimpleNamespace(task_rows=[row], active_tasks=[task])
 
-    main_window.MainWindow._refresh_safe_organize_button(window, 0, output_dir)
+    candidate_count = main_window.MainWindow._refresh_safe_organize_button(window, 0, output_dir)
 
-    assert button.visible
+    assert candidate_count == 1
     assert button.options["text"] == "安全整理（1）"
 
     invalid_dir = output_dir / "箱号错误"
     invalid_dir.mkdir()
     (invalid_dir / "GESU5903360-待确认-1.pdf").write_bytes(b"pdf")
-    main_window.MainWindow._refresh_safe_organize_button(window, 0, output_dir)
+    candidate_count = main_window.MainWindow._refresh_safe_organize_button(window, 0, output_dir)
 
-    assert not button.visible
+    assert candidate_count == 0
 
 
 def test_task_section_expands_without_internal_scrollbar():
@@ -630,7 +637,7 @@ def test_secondary_dialogs_are_centered_before_modal_grab():
     assert source.count("dialog.withdraw()") == 2
 
 
-def test_review_button_visibility_follows_candidate_count(monkeypatch, tmp_path: Path):
+def test_review_button_reports_candidate_count(monkeypatch, tmp_path: Path):
     from waybill_ocr.ui import main_window
 
     output_dir = tmp_path / "output"
@@ -638,13 +645,40 @@ def test_review_button_visibility_follows_candidate_count(monkeypatch, tmp_path:
     window = SimpleNamespace(task_rows=[{"review_button": button}])
 
     monkeypatch.setattr(main_window, "scan_review_candidates", lambda _output: [])
-    main_window.MainWindow._refresh_review_button(window, 0, output_dir)
+    assert main_window.MainWindow._refresh_review_button(window, 0, output_dir) == 0
     assert not button.visible
 
     monkeypatch.setattr(main_window, "scan_review_candidates", lambda _output: [object(), object()])
-    main_window.MainWindow._refresh_review_button(window, 0, output_dir)
-    assert button.visible
+    assert main_window.MainWindow._refresh_review_button(window, 0, output_dir) == 2
+    assert button.options["text"] == "\u67e5\u770b\u5f85\u786e\u8ba4\uff08{0}\uff09".format(2)
 
+
+def test_completion_actions_prioritize_safe_organize_then_review_then_results():
+    from waybill_ocr.ui import main_window
+
+    row = {key: FakeWidget() for key in ("review_button", "safe_organize_button", "completion_primary_button", "completion_excel_button", "completion_output_button")}
+    window = SimpleNamespace(task_rows=[row])
+
+    main_window.MainWindow._show_completion_actions(
+        window, 0, {"success": 3}, review_count=0, safe_organize_count=0
+    )
+    assert row["completion_primary_button"].visible
+    assert row["completion_primary_button"].options["text"] == "\u6253\u5f00\u6b63\u786e\u8bc6\u522b"
+    assert row["completion_excel_button"].visible and row["completion_output_button"].visible
+
+    main_window.MainWindow._show_completion_actions(
+        window, 0, {"success": 0}, review_count=2, safe_organize_count=0
+    )
+    assert row["review_button"].visible
+    assert row["review_button"].options["bg"] == main_window.BUTTON_START
+    assert not row["completion_primary_button"].visible
+
+    main_window.MainWindow._show_completion_actions(
+        window, 0, {"success": 0}, review_count=2, safe_organize_count=1
+    )
+    assert row["safe_organize_button"].visible and row["review_button"].visible
+    assert row["review_button"].options["bg"] == main_window.BUTTON_BROWSE
+    assert not row["completion_primary_button"].visible
 
 def test_diagnostic_report_contains_environment_and_log_details():
     from waybill_ocr.config import AppConfig
